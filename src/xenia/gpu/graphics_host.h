@@ -31,6 +31,10 @@ class GraphicsHost {
   // Display resolution reported to the title.
   virtual uint32_t GetDisplayWidth() { return 1280; }
   virtual uint32_t GetDisplayHeight() { return 720; }
+
+  // Called on the command processor thread when it executes a swap, before
+  // the frame is handed to the presenter (frame timing).
+  virtual void OnSwap() {}
 };
 
 }  // namespace gpu

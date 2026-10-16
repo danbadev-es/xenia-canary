@@ -336,6 +336,14 @@ class Presenter {
   // Requests (re)painting with the UI if there's UI to draw.
   void RequestUIPaintFromUIThread();
 
+  // AnyX360: called after every paint attempt, on the thread that painted
+  // (the UI thread or the guest output thread), with whether it was the UI
+  // thread and whether an image was presented. Set before painting starts.
+  void SetPresentObserver(
+      std::function<void(bool ui_thread, bool presented)> observer) {
+    present_observer_ = std::move(observer);
+  }
+
  protected:
   enum class PaintResult {
     kPresented,
@@ -915,6 +923,8 @@ class Presenter {
   // connection as the next successful reconnection should be followed by a
   // repaint request anyway.
   std::atomic<bool> ui_thread_paint_requested_{false};
+
+  std::function<void(bool ui_thread, bool presented)> present_observer_;
 
   std::mutex guest_output_paint_config_mutex_;
   // UI thread: writable, guest output thread: read-only.

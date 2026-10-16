@@ -1276,6 +1276,11 @@ Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
   assert_true(surface_paint_connection_state_ ==
               SurfacePaintConnectionState::kConnectedPaintable);
   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
+  if (present_observer_) {
+    present_observer_(is_in_ui_thread_paint_,
+                      result == PaintResult::kPresented ||
+                          result == PaintResult::kPresentedSuboptimal);
+  }
   switch (result) {
     case PaintResult::kPresented:
       surface_paint_connection_was_optimal_at_successful_paint_ = true;
