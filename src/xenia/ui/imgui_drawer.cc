@@ -731,7 +731,7 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   // it now if needed.
   DetachIfLastWindowRemoved();
 
-  if (!dialogs_.empty() || !notifications_.empty()) {
+  if ((!dialogs_.empty() && continuous_repaint_) || !notifications_.empty()) {
     // Repaint (and handle input) continuously if still active.
     presenter_->RequestUIPaintFromUIThread();
   }

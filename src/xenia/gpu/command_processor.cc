@@ -333,11 +333,34 @@ void CommandProcessor::RestoreGammaRamp(
 }
 
 void CommandProcessor::CallInThread(std::function<void()> fn) {
-  if (pending_fns_.empty() &&
+  if (!has_pending_fns_.load(std::memory_order_acquire) &&
       xe::threading::Thread::GetCurrentThread() == worker_thread_.get()) {
     fn();
-  } else {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(pending_fns_mutex_);
     pending_fns_.push(std::move(fn));
+    has_pending_fns_.store(true, std::memory_order_release);
+  }
+  // Wake the worker if it's waiting for commands.
+  write_ptr_index_event_->SetBoostPriority();
+}
+
+void CommandProcessor::RunPendingFunctions() {
+  if (!has_pending_fns_.load(std::memory_order_acquire)) {
+    return;
+  }
+  std::queue<std::function<void()>> fns;
+  {
+    std::lock_guard<std::mutex> lock(pending_fns_mutex_);
+    fns.swap(pending_fns_);
+    has_pending_fns_.store(false, std::memory_order_relaxed);
+  }
+  while (!fns.empty()) {
+    auto fn = std::move(fns.front());
+    fns.pop();
+    fn();
   }
 }
 
@@ -361,11 +384,7 @@ void CommandProcessor::WorkerThreadMain() {
   }
 
   while (worker_running_) {
-    while (!pending_fns_.empty()) {
-      auto fn = std::move(pending_fns_.front());
-      pending_fns_.pop();
-      fn();
-    }
+    RunPendingFunctions();
 
     uint32_t write_ptr_index = write_ptr_index_.load();
     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
@@ -391,11 +410,13 @@ void CommandProcessor::WorkerThreadMain() {
         }
         loop_count++;
         write_ptr_index = write_ptr_index_.load();
-      } while (worker_running_ && pending_fns_.empty() &&
+      } while (worker_running_ &&
+               !has_pending_fns_.load(std::memory_order_acquire) &&
                (write_ptr_index == 0xBAADF00D ||
                 read_ptr_index_ == write_ptr_index));
       ReturnFromWait();
-      if (!worker_running_ || !pending_fns_.empty()) {
+      if (!worker_running_ ||
+          has_pending_fns_.load(std::memory_order_acquire)) {
         continue;
       }
     }

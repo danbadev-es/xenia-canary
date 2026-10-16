@@ -66,6 +66,10 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
 
   void ClearDialogs();
   void EnableNotifications(bool enable) { are_notifications_enabled_ = enable; }
+  // AnyX360: whether dialogs repaint (and poll input) continuously, at the UI
+  // frame rate. Off, the UI is drawn only with new guest frames, so a passive
+  // overlay doesn't make the UI thread repaint at the monitor refresh rate.
+  void SetContinuousRepaint(bool enable) { continuous_repaint_ = enable; }
 
   std::unique_ptr<ImmediateTexture> LoadImGuiIcon(
       std::span<const uint8_t> data);
@@ -172,6 +176,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   uint64_t last_frame_time_ticks_;
 
   bool are_notifications_enabled_ = true;
+  bool continuous_repaint_ = true;
 };
 
 }  // namespace ui

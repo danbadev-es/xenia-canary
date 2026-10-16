@@ -1189,7 +1189,11 @@ bool Presenter::RequestPaintOrConnectionRecoveryViaWindow(
   assert_not_null(window_);
   assert_not_null(surface_);
   if (ui_thread_paint_requested_.exchange(true, std::memory_order_relaxed)) {
-    // Invalidation pending already, no need to do it twice.
+    // Invalidation pending already, no need to do it twice - but a forced
+    // tick (a new guest frame) must still cut the wait for the UI tick short.
+    if (force_ui_thread_paint_tick) {
+      ForceUIThreadPaintTick();
+    }
     return false;
   }
   if (force_ui_thread_paint_tick) {
@@ -1392,8 +1396,12 @@ void Presenter::WaitForUITickFromUIThread() {
 
 void Presenter::ForceUIThreadPaintTick() {
 #if XE_PLATFORM_WIN32
-  std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
-  dxgi_ui_tick_force_requested_ = true;
+  {
+    std::scoped_lock<std::mutex> dxgi_ui_tick_lock(dxgi_ui_tick_mutex_);
+    dxgi_ui_tick_force_requested_ = true;
+  }
+  // Wake WaitForUITickFromUIThread if it's already waiting for a vblank.
+  dxgi_ui_tick_signal_condition_.notify_all();
 #endif  // XE_PLATFORM
 }
 

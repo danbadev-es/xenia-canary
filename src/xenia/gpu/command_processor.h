@@ -602,12 +602,17 @@ class CommandProcessor {
   std::atomic<bool> worker_running_;
   std::unique_ptr<xe::threading::Thread> worker_thread_;
 
+  // Functions to run on the worker thread (CallInThread), pushed from any
+  // thread.
+  std::mutex pending_fns_mutex_;
   std::queue<std::function<void()>> pending_fns_;
+  std::atomic<bool> has_pending_fns_{false};
+  void RunPendingFunctions();
 
   // MicroEngine binary from PM4_ME_INIT
   std::vector<uint32_t> me_bin_;
 
-  uint32_t counter_ = 0;
+  std::atomic<uint32_t> counter_ = 0;
 
   uint32_t primary_buffer_ptr_ = 0;
   uint32_t primary_buffer_size_ = 0;
