@@ -226,6 +226,8 @@ bool CommandProcessor::Initialize() {
     xe::threading::set_name("GPU Commands");
     WorkerThreadMain();
   });
+  // The title's frames wait for it: run ahead of normal-priority work.
+  worker_thread_->set_priority(xe::threading::ThreadPriority::kAboveNormal);
 
   return true;
 }
