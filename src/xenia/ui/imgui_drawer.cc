@@ -983,6 +983,10 @@ void ImGuiDrawer::DetachIfLastWindowRemoved() {
 }
 
 void ImGuiDrawer::UpdateGamepads() {
+#if XE_UI_NO_HID
+  // AnyX360: built without Xenia's HID input system; no gamepad navigation.
+  return;
+#else
   if (!input_system_) {
     return;
   }
@@ -1099,6 +1103,7 @@ void ImGuiDrawer::UpdateGamepads() {
              -hid::X_INPUT_GAMEPAD_LEFT_THUMB_DEADZONE, -32768);
 #undef MAP_BUTTON
 #undef MAP_ANALOG
+#endif  // XE_UI_NO_HID
 }
 
 }  // namespace ui
