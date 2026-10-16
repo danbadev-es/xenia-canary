@@ -23,8 +23,6 @@
 #include "xenia/gpu/sampler_info.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/xenos_zpd_report.h"
-#include "xenia/kernel/kernel_state.h"
-#include "xenia/kernel/user_module.h"
 #if !defined(NDEBUG)
 
 #define XE_ENABLE_GPU_REG_WRITE_LOGGING 1
@@ -185,10 +183,9 @@ void SetZPDMode(const std::string& mode) {
 using namespace xe::gpu::xenos;
 
 CommandProcessor::CommandProcessor(GraphicsSystem* graphics_system,
-                                   kernel::KernelState* kernel_state)
+                                   void* unused_kernel_state)
     : reader_(nullptr, 0),
       memory_(graphics_system->memory()),
-      kernel_state_(kernel_state),
       graphics_system_(graphics_system),
       register_file_(graphics_system_->register_file()),
       trace_writer_(graphics_system->memory()->physical_membase()),
@@ -221,16 +218,14 @@ bool CommandProcessor::Initialize() {
   }
 
   worker_running_ = true;
-  worker_thread_ =
-      kernel::object_ref<kernel::XHostThread>(new kernel::XHostThread(
-          kernel_state_, 128 * 1024, 0,
-          [this]() {
-            WorkerThreadMain();
-            return 0;
-          },
-          kernel_state_->GetIdleProcess()));
-  worker_thread_->set_name("GPU Commands");
-  worker_thread_->Create();
+  // AnyX360: a plain host thread (Xenia uses a kernel XHostThread so it can run
+  // guest code; interrupts are delivered by the host here).
+  xe::threading::Thread::CreationParameters params;
+  params.stack_size = 16 * 1024 * 1024;
+  worker_thread_ = xe::threading::Thread::Create(params, [this]() {
+    xe::threading::set_name("GPU Commands");
+    WorkerThreadMain();
+  });
 
   return true;
 }
@@ -240,7 +235,7 @@ void CommandProcessor::Shutdown() {
 
   worker_running_ = false;
   write_ptr_index_event_->Set();
-  worker_thread_->Wait(0, 0, 0, nullptr);
+  xe::threading::Wait(worker_thread_.get(), false);
   worker_thread_.reset();
 }
 
@@ -339,7 +334,7 @@ void CommandProcessor::RestoreGammaRamp(
 
 void CommandProcessor::CallInThread(std::function<void()> fn) {
   if (pending_fns_.empty() &&
-      kernel::XThread::IsInThread(worker_thread_.get())) {
+      xe::threading::Thread::GetCurrentThread() == worker_thread_.get()) {
     fn();
   } else {
     pending_fns_.push(std::move(fn));
@@ -446,7 +441,7 @@ void CommandProcessor::Resume() {
   }
   paused_ = false;
 
-  worker_thread_->thread()->Resume();
+  worker_thread_->Resume();
 }
 
 bool CommandProcessor::Save(ByteStream* stream) {
@@ -491,7 +486,7 @@ void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
 
-  std::memset(kernel_state_->memory()->TranslatePhysical(primary_buffer_ptr_),
+  std::memset(memory_->TranslatePhysical(primary_buffer_ptr_),
               0, primary_buffer_size_);
 }
 
@@ -507,10 +502,14 @@ void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr,
 }
 
 XE_NOINLINE XE_COLD void CommandProcessor::LogKickoffInitator(uint32_t value) {
-  cpu::backend::GuestPseudoStackTrace st;
+  struct {
+    uint32_t count = 0;
+    uint32_t return_addrs[1] = {};
+    bool truncated_flag = false;
+  } st;
 
-  if (logging::ShouldLog(LogLevel::Debug) &&
-      kernel_state_->processor()->backend()->PopulatePseudoStacktrace(&st)) {
+  // AnyX360: no JIT backend to produce guest stack traces.
+  if (false) {
     logging::LoggerBatch<LogLevel::Debug> log_initiator{};
 
     log_initiator("Updating read ptr to {}, initiator stacktrace below\n",
@@ -521,8 +520,7 @@ XE_NOINLINE XE_COLD void CommandProcessor::LogKickoffInitator(uint32_t value) {
     }
 
     if (st.truncated_flag) {
-      log_initiator("\t(Truncated stacktrace to {} entries)\n",
-                    cpu::backend::MAX_GUEST_PSEUDO_STACKTRACE_ENTRIES);
+      log_initiator("\t(Truncated stacktrace)\n");
     }
     log_initiator.submit('d');
   }

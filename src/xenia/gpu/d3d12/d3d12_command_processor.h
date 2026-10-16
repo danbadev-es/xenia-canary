@@ -35,8 +35,6 @@
 #include "xenia/gpu/dxbc_shader_translator.h"
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/xenos.h"
-#include "xenia/kernel/kernel_state.h"
-#include "xenia/kernel/user_module.h"
 #include "xenia/ui/d3d12/d3d12_descriptor_heap_pool.h"
 #include "xenia/ui/d3d12/d3d12_gpu_completion_timeline.h"
 #include "xenia/ui/d3d12/d3d12_provider.h"
@@ -64,7 +62,7 @@ class D3D12CommandProcessor final : public CommandProcessor {
 #undef OVERRIDING_BASE_CMDPROCESSOR
  public:
   explicit D3D12CommandProcessor(D3D12GraphicsSystem* graphics_system,
-                                 kernel::KernelState* kernel_state);
+                                 void* unused_kernel_state = nullptr);
   ~D3D12CommandProcessor();
 
   void ClearCaches() override;

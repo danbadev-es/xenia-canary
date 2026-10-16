@@ -26,7 +26,7 @@
 #include "xenia/gpu/trace_writer.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/gpu/xenos_zpd_report.h"
-#include "xenia/kernel/xthread.h"
+#include "xenia/base/threading.h"
 #include "xenia/memory.h"
 #include "xenia/ui/presenter.h"
 
@@ -123,7 +123,7 @@ class CommandProcessor {
   };
 
   CommandProcessor(GraphicsSystem* graphics_system,
-                   kernel::KernelState* kernel_state);
+                   void* unused_kernel_state = nullptr);
   virtual ~CommandProcessor();
   uint32_t counter() const { return counter_; }
   void increment_counter() { counter_++; }
@@ -537,7 +537,6 @@ class CommandProcessor {
   virtual void InitializeTrace();
 
   Memory* memory_ = nullptr;
-  kernel::KernelState* kernel_state_ = nullptr;
   GraphicsSystem* graphics_system_ = nullptr;
   RegisterFile* XE_RESTRICT register_file_ = nullptr;
 
@@ -601,7 +600,7 @@ class CommandProcessor {
   uint32_t trace_swap_count_ = 0;
 
   std::atomic<bool> worker_running_;
-  kernel::object_ref<kernel::XHostThread> worker_thread_;
+  std::unique_ptr<xe::threading::Thread> worker_thread_;
 
   std::queue<std::function<void()>> pending_fns_;
 

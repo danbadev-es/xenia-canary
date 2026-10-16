@@ -21,7 +21,7 @@
 #include "xenia/config.h"
 #include "xenia/gpu/command_processor.h"
 #include "xenia/gpu/gpu_flags.h"
-#include "xenia/kernel/kernel_state.h"
+#include "xenia/gpu/graphics_host.h"
 #include "xenia/ui/graphics_provider.h"
 #include "xenia/ui/window.h"
 #include "xenia/ui/windowed_app_context.h"
@@ -54,7 +54,7 @@ __declspec(dllexport) uint32_t AmdPowerXpressRequestHighPerformance = 1;
 }  // extern "C"
 #endif  // XE_PLATFORM_WIN32
 
-GraphicsSystem::GraphicsSystem() : frame_limiter_worker_running_(false) {
+GraphicsSystem::GraphicsSystem() {
   register_file_ = reinterpret_cast<RegisterFile*>(memory::AllocFixed(
       nullptr, sizeof(RegisterFile), memory::AllocationType::kReserveCommit,
       memory::PageAccess::kReadWrite));
@@ -73,13 +73,11 @@ static void WarnTraceCaptureUnavailable() {
       "build or enable the XENIA_ENABLE_GPU_TRACE CMake option");
 }
 
-X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
-                               kernel::KernelState* kernel_state,
+X_STATUS GraphicsSystem::Setup(Memory* memory, GraphicsHost* host,
                                ui::WindowedAppContext* app_context,
                                bool with_presentation) {
-  memory_ = processor->memory();
-  processor_ = processor;
-  kernel_state_ = kernel_state;
+  memory_ = memory;
+  host_ = host;
   app_context_ = app_context;
 
   scaled_aspect_x_ = 16;
@@ -145,157 +143,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
       reinterpret_cast<cpu::MMIOReadCallback>(ReadRegisterThunk),
       reinterpret_cast<cpu::MMIOWriteCallback>(WriteRegisterThunk));
 
-  // Frame limiter thread.
-  frame_limiter_worker_running_ = true;
-  frame_limiter_worker_thread_ =
-      kernel::object_ref<kernel::XHostThread>(new kernel::XHostThread(
-          kernel_state_, 128 * 1024, 0,
-          [this]() {
-            uint64_t normalized_framerate_limit =
-                std::max<uint64_t>(0, cvars::framerate_limit);
-
-            // If VSYNC is enabled, but frames are not limited,
-            // lock framerate at default value of 60
-            if (normalized_framerate_limit == 0 && cvars::vsync) {
-              normalized_framerate_limit = 60;
-            }
-
-            const double vsync_duration_d =
-                cvars::vsync
-                    ? std::max<double>(5.0,
-                                       1000.0 / static_cast<double>(
-                                                    normalized_framerate_limit))
-                    : 1.0;
-            uint64_t last_frame_time = Clock::QueryGuestTickCount();
-            // Deadline the Linux branch paces to, and the most lateness it
-            // will try to make up before giving the missed beats up.
-            using steady_time_point = std::chrono::steady_clock::time_point;
-            steady_time_point next_vblank_deadline{};
-            constexpr auto kMaxVblankCatchUp = std::chrono::seconds(1);
-            (void)next_vblank_deadline;
-            (void)kMaxVblankCatchUp;
-    // Sleep for 90% of the vblank duration on Windows, spin for 10%
-    // Linux uses full sleep duration due to scheduler quantum issues
-#if XE_PLATFORM_WIN32
-            constexpr double duration_scalar = 0.90;
-#endif
-#if XE_PLATFORM_LINUX
-            constexpr double duration_scalar = 1.0;
-#endif
-
-            while (frame_limiter_worker_running_) {
-              // If there is no title running then there is no need for guest
-              // frame limiter thread.
-              if (!kernel_state_->is_title_open()) {
-                xe::threading::Sleep(std::chrono::milliseconds(100));
-                continue;
-              }
-
-              register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
-                  GetResolution().second;
-
-#if XE_PLATFORM_WIN32
-              if (cvars::vsync) {
-                const uint64_t current_time = Clock::QueryGuestTickCount();
-                const uint64_t tick_freq = Clock::guest_tick_frequency();
-                const uint64_t time_delta = current_time - last_frame_time;
-                const double elapsed_d =
-                    static_cast<double>(time_delta) /
-                    (static_cast<double>(tick_freq) / 1000.0);
-                if (elapsed_d >= vsync_duration_d) {
-                  last_frame_time = current_time;
-
-                  MarkVblank();
-                  const uint64_t estimated_nanoseconds = static_cast<uint64_t>(
-                      (vsync_duration_d * 1000000.0) *
-                      duration_scalar);  // 1000 microseconds = 1 ms
-
-                  threading::NanoSleep(estimated_nanoseconds);
-                }
-              }
-
-              if (!cvars::vsync) {
-                MarkVblank();
-                if (normalized_framerate_limit > 0) {
-                  // framerate_limit is over 0, vsync disabled
-                  //  - No VSYNC + limited frames defined by user
-                  uint64_t framerate_limited_sleep_time =
-                      1000000000 / normalized_framerate_limit;
-                  xe::threading::NanoSleep(framerate_limited_sleep_time);
-                } else {
-                  // framerate_limit is 0, vsync disabled
-                  //  - No VSYNC + unlimited frames
-                  xe::threading::Sleep(std::chrono::milliseconds(1));
-                }
-              }
-#endif
-#if XE_PLATFORM_LINUX
-              MarkVblank();
-
-              if (cvars::vsync || normalized_framerate_limit > 0) {
-                uint64_t sleep_duration_ns =
-                    static_cast<uint64_t>(vsync_duration_d * 1000000.0);
-                if (!cvars::vsync && normalized_framerate_limit > 0) {
-                  sleep_duration_ns = 1000000000 / normalized_framerate_limit;
-                }
-                // Sleeping a flat period from wherever the thread woke makes
-                // the real period that period plus the interrupt dispatch
-                // plus the scheduler's wake-up latency, and none of it is
-                // ever made up. Audio drains at the device's own fixed rate,
-                // so a beat the guest does not get is picture time lost
-                // against the sound for good. Pace to a deadline instead and
-                // deliver the missed beats.
-                const auto period = std::chrono::nanoseconds(std::max<int64_t>(
-                    1, static_cast<int64_t>(
-                           static_cast<double>(sleep_duration_ns) /
-                           Clock::guest_time_scalar())));
-                auto now = std::chrono::steady_clock::now();
-                // A pause is not missed beats: start again from now after
-                // one.
-                if (vblank_deadline_reset_.exchange(false) ||
-                    next_vblank_deadline == steady_time_point()) {
-                  next_vblank_deadline = now;
-                }
-                next_vblank_deadline += period;
-                if (next_vblank_deadline > now) {
-                  threading::NanoSleep(
-                      std::chrono::duration_cast<std::chrono::nanoseconds>(
-                          next_vblank_deadline - now)
-                          .count());
-                } else if (now - next_vblank_deadline > kMaxVblankCatchUp) {
-                  // Further behind than catching up could hide: give the
-                  // missed beats up rather than running the guest fast
-                  // through what was a real freeze.
-                  next_vblank_deadline = now + period;
-                  threading::NanoSleep(period.count());
-                }
-                // Otherwise loop straight round without sleeping, delivering
-                // the missed beats until the guest has had as many as real
-                // time says it should.
-              } else {
-                xe::threading::Sleep(std::chrono::milliseconds(1));
-              }
-#endif
-            }
-            return 0;
-          },
-          kernel_state->GetIdleProcess()));
-  // As we run vblank interrupts the debugger must be able to suspend us.
-  frame_limiter_worker_thread_->set_can_debugger_suspend(true);
-  frame_limiter_worker_thread_->set_name("GPU Frame limiter");
-  frame_limiter_worker_thread_->Create();
-  // The Windows branch spins for part of each period, which is what the
-  // lowest priority is for. The Linux branch only sleeps, so there it buys
-  // nothing and costs wake-up latency: kLowest maps to nice 15 against nice 0
-  // for every other thread in the process, and any other busy program then
-  // delays the guest's vblanks.
-#if XE_PLATFORM_WIN32
-  frame_limiter_worker_thread_->thread()->set_priority(
-      threading::ThreadPriority::kLowest);
-#else
-  frame_limiter_worker_thread_->thread()->set_priority(
-      threading::ThreadPriority::kNormal);
-#endif
+  // AnyX360: no frame limiter thread; the host calls MarkVblank().
 
   return X_STATUS_SUCCESS;
 }
@@ -305,12 +153,6 @@ void GraphicsSystem::Shutdown() {
     EndTracing();
     command_processor_->Shutdown();
     command_processor_.reset();
-  }
-
-  if (frame_limiter_worker_thread_) {
-    frame_limiter_worker_running_ = false;
-    frame_limiter_worker_thread_->Wait(0, 0, 0, nullptr);
-    frame_limiter_worker_thread_.reset();
   }
 
   if (presenter_) {
@@ -388,6 +230,7 @@ void GraphicsSystem::WriteRegister(uint32_t addr, uint32_t value) {
 
   switch (r) {
     case 0x01C5:  // CP_RB_WPTR
+      XELOGGPU("CP_RB_WPTR <- {}", value);
       command_processor_->UpdateWritePointer(value);
       break;
     case 0x0F01:  // RB_BC_CONTROL
@@ -422,12 +265,17 @@ void GraphicsSystem::SetInterruptCallback(uint32_t callback,
 }
 
 void GraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t cpu) {
-  kernel_state()->EmulateCPInterruptDPC(interrupt_callback_,
-                                        interrupt_callback_data_, source, cpu);
+  if (host_ && interrupt_callback_) {
+    host_->DispatchInterrupt(interrupt_callback_, interrupt_callback_data_,
+                             source, cpu);
+  }
 }
 
 void GraphicsSystem::MarkVblank() {
   SCOPE_profile_cpu_f("gpu");
+
+  register_file()->values[XE_GPU_REG_D1MODE_V_COUNTER] +=
+      GetResolution().second;
 
   // Increment vblank counter (so the game sees us making progress).
   command_processor_->increment_counter();
@@ -525,22 +373,15 @@ bool GraphicsSystem::Restore(ByteStream* stream) {
 }
 
 std::pair<uint32_t, uint32_t> GraphicsSystem::GetResolution() const {
-  if (!kernel_state_) {
-    return {1280, 720};
-  }
-
   if (cvars::custom_internal_display_resolution_x != 0 &&
       cvars::custom_internal_display_resolution_y != 0) {
     return {cvars::custom_internal_display_resolution_x,
             cvars::custom_internal_display_resolution_y};
   }
-
-  const auto resolution =
-      kernel::Resolution(kernel_state()->xconfig()->ReadSetting<uint32_t>(
-          kernel::XCONFIG_USER_CATEGORY,
-          kernel::XCONFIG_USER_AV_COMPOSITE_SCREENSZ));
-
-  return {resolution.width_, resolution.height_};
+  if (host_) {
+    return {host_->GetDisplayWidth(), host_->GetDisplayHeight()};
+  }
+  return {1280, 720};
 }
 
 }  // namespace gpu

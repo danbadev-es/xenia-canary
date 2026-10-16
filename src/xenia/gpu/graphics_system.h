@@ -18,9 +18,9 @@
 #include <string>
 #include <thread>
 
-#include "xenia/cpu/processor.h"
+#include "xenia/cpu/mmio_handler.h"
+#include "xenia/gpu/graphics_host.h"
 #include "xenia/gpu/register_file.h"
-#include "xenia/kernel/xthread.h"
 #include "xenia/memory.h"
 #include "xenia/ui/graphics_provider.h"
 #include "xenia/ui/presenter.h"
@@ -43,15 +43,17 @@ class GraphicsSystem {
   virtual std::string name() const = 0;
 
   Memory* memory() const { return memory_; }
-  cpu::Processor* processor() const { return processor_; }
-  kernel::KernelState* kernel_state() const { return kernel_state_; }
+  GraphicsHost* host() const { return host_; }
   ui::GraphicsProvider* provider() const { return provider_.get(); }
   ui::Presenter* presenter() const { return presenter_.get(); }
 
-  virtual X_STATUS Setup(cpu::Processor* processor,
-                         kernel::KernelState* kernel_state,
+  virtual X_STATUS Setup(Memory* memory, GraphicsHost* host,
                          ui::WindowedAppContext* app_context,
                          bool with_presentation);
+
+  // AnyX360: vblank is driven by the host (it owns the guest threads that run
+  // the interrupt callback).
+  void MarkVblank();
   virtual void Shutdown();
 
   // May be called from any thread any number of times, even during recovery
@@ -109,19 +111,14 @@ class GraphicsSystem {
   uint32_t ReadRegister(uint32_t addr);
   void WriteRegister(uint32_t addr, uint32_t value);
 
-  void MarkVblank();
-
   Memory* memory_ = nullptr;
-  cpu::Processor* processor_ = nullptr;
-  kernel::KernelState* kernel_state_ = nullptr;
+  GraphicsHost* host_ = nullptr;
   ui::WindowedAppContext* app_context_ = nullptr;
   std::unique_ptr<ui::GraphicsProvider> provider_;
 
   uint32_t interrupt_callback_ = 0;
   uint32_t interrupt_callback_data_ = 0;
 
-  std::atomic<bool> frame_limiter_worker_running_;
-  kernel::object_ref<kernel::XHostThread> frame_limiter_worker_thread_;
 
   RegisterFile* register_file_;
   std::unique_ptr<CommandProcessor> command_processor_;

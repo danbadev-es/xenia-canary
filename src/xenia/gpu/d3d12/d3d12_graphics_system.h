@@ -29,7 +29,7 @@ class D3D12GraphicsSystem : public GraphicsSystem {
 
   std::string name() const override;
 
-  X_STATUS Setup(cpu::Processor* processor, kernel::KernelState* kernel_state,
+  X_STATUS Setup(Memory* memory, GraphicsHost* host,
                  ui::WindowedAppContext* app_context,
                  bool with_presentation) override;
 

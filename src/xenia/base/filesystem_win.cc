@@ -40,9 +40,12 @@ std::filesystem::path to_path(const std::u16string_view source) {
 namespace filesystem {
 
 std::filesystem::path GetExecutablePath() {
-  wchar_t* path;
-  auto error = _get_wpgmptr(&path);
-  return !error ? std::filesystem::path(path) : std::filesystem::path();
+  // AnyX360: GetModuleFileNameW works regardless of the entry point; _wpgmptr
+  // is only set for programs entered through wmain/wWinMain.
+  wchar_t path[MAX_PATH * 4];
+  DWORD length = GetModuleFileNameW(nullptr, path, DWORD(std::size(path)));
+  return length ? std::filesystem::path(std::wstring(path, length))
+                : std::filesystem::path();
 }
 
 std::filesystem::path GetExecutableFolder() {
