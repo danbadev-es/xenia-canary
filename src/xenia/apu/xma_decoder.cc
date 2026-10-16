@@ -21,10 +21,7 @@
 #include "xenia/base/profiling.h"
 #include "xenia/base/ring_buffer.h"
 #include "xenia/base/string_buffer.h"
-#include "xenia/cpu/processor.h"
-#include "xenia/cpu/thread_state.h"
-#include "xenia/kernel/kernel_state.h"
-#include "xenia/kernel/xthread.h"
+#include "xenia/cpu/mmio_handler.h"
 extern "C" {
 #include "third_party/FFmpeg/libavutil/log.h"
 }  // extern "C"
@@ -76,8 +73,7 @@ DEFINE_string(
 namespace xe {
 namespace apu {
 
-XmaDecoder::XmaDecoder(cpu::Processor* processor)
-    : memory_(processor->memory()), processor_(processor) {}
+XmaDecoder::XmaDecoder(Memory* memory) : memory_(memory) {}
 
 XmaDecoder::~XmaDecoder() = default;
 
@@ -127,7 +123,7 @@ void av_log_callback(void* avcl, int level, const char* fmt, va_list va) {
                                    "ffmpeg: {}", buff.to_string_view());
 }
 
-X_STATUS XmaDecoder::Setup(kernel::KernelState* kernel_state) {
+X_STATUS XmaDecoder::Setup() {
   // Setup ffmpeg logging callback
   av_log_set_callback(av_log_callback);
 
@@ -173,21 +169,14 @@ X_STATUS XmaDecoder::Setup(kernel::KernelState* kernel_state) {
   worker_running_ = true;
   work_event_ = xe::threading::Event::CreateAutoResetEvent(false);
   assert_not_null(work_event_);
-  worker_thread_ =
-      kernel::object_ref<kernel::XHostThread>(new kernel::XHostThread(
-          kernel_state, 128 * 1024, 0,
-          [this]() {
-            if (cvars::use_dedicated_xma_thread) {
-              WorkerThreadMain();
-            }
-            return 0;
-          },
-          kernel_state
-              ->GetIdleProcess()));  // this one doesnt need any process
-                                     // actually. never calls any guest code
+  xe::threading::Thread::CreationParameters params;
+  params.stack_size = 128 * 1024;
+  worker_thread_ = xe::threading::Thread::Create(params, [this]() {
+    if (cvars::use_dedicated_xma_thread) {
+      WorkerThreadMain();
+    }
+  });
   worker_thread_->set_name("XMA Decoder");
-  worker_thread_->set_can_debugger_suspend(true);
-  worker_thread_->Create();
 
   return X_STATUS_SUCCESS;
 }
@@ -229,7 +218,7 @@ void XmaDecoder::Shutdown() {
 
   if (worker_thread_) {
     // Wait for work thread.
-    xe::threading::Wait(worker_thread_->thread(), false);
+    xe::threading::Wait(worker_thread_.get(), false);
     worker_thread_.reset();
   }
 

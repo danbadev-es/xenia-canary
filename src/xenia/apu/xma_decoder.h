@@ -17,7 +17,8 @@
 #include "xenia/apu/xma_context.h"
 #include "xenia/apu/xma_register_file.h"
 #include "xenia/base/bit_map.h"
-#include "xenia/kernel/xthread.h"
+#include "xenia/base/threading.h"
+#include "xenia/memory.h"
 #include "xenia/xbox.h"
 
 namespace xe {
@@ -27,13 +28,13 @@ struct XMA_CONTEXT_DATA;
 
 class XmaDecoder {
  public:
-  explicit XmaDecoder(cpu::Processor* processor);
+  // AnyX360: built on guest memory alone (no Xenia CPU or kernel).
+  explicit XmaDecoder(Memory* memory);
   ~XmaDecoder();
 
   Memory* memory() const { return memory_; }
-  cpu::Processor* processor() const { return processor_; }
 
-  X_STATUS Setup(kernel::KernelState* kernel_state);
+  X_STATUS Setup();
   void Shutdown();
 
   uint32_t context_array_ptr() const {
@@ -68,10 +69,9 @@ class XmaDecoder {
 
  protected:
   Memory* memory_ = nullptr;
-  cpu::Processor* processor_ = nullptr;
 
   std::atomic<bool> worker_running_ = {false};
-  kernel::object_ref<kernel::XHostThread> worker_thread_;
+  std::unique_ptr<xe::threading::Thread> worker_thread_;
   std::unique_ptr<xe::threading::Event> work_event_ = nullptr;
 
   std::atomic<bool> paused_ = false;
