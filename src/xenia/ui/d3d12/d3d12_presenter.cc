@@ -1083,10 +1083,14 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(
   // fullscreen is ever used in, the allow tearing flag must not be passed in
   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
   // presentation model used in Direct3D 12).
+  // AnyX360: optionally synchronized to the vertical blank (no tearing).
+  UINT sync_interval = present_sync_interval();
   HRESULT present_result = paint_context_.swap_chain->Present(
-      0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
-                                     ? DXGI_PRESENT_ALLOW_TEARING
-                                     : 0));
+      sync_interval,
+      DXGI_PRESENT_RESTART | (sync_interval == 0 &&
+                                      paint_context_.swap_chain_allows_tearing
+                                  ? DXGI_PRESENT_ALLOW_TEARING
+                                  : 0));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.

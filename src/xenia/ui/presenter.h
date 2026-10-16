@@ -344,7 +344,17 @@ class Presenter {
     present_observer_ = std::move(observer);
   }
 
+  // AnyX360: 0 presents immediately (tearing in exclusive flip modes unless
+  // the display has a variable refresh rate), 1 waits for the vertical blank.
+  void SetPresentSyncInterval(uint32_t interval) {
+    present_sync_interval_.store(interval, std::memory_order_relaxed);
+  }
+
  protected:
+  uint32_t present_sync_interval() const {
+    return present_sync_interval_.load(std::memory_order_relaxed);
+  }
+
   enum class PaintResult {
     kPresented,
     kPresentedSuboptimal,
@@ -925,6 +935,7 @@ class Presenter {
   std::atomic<bool> ui_thread_paint_requested_{false};
 
   std::function<void(bool ui_thread, bool presented)> present_observer_;
+  std::atomic<uint32_t> present_sync_interval_{0};
 
   std::mutex guest_output_paint_config_mutex_;
   // UI thread: writable, guest output thread: read-only.
