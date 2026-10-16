@@ -221,8 +221,8 @@ bool Memory::Initialize() {
   heaps_.physical.Initialize(this, physical_membase_, HeapType::kGuestPhysical,
                              0x00000000, 0x20000000, 4096);
   heaps_.vA0000000.Initialize(this, virtual_membase_, HeapType::kGuestPhysical,
-                              0xA0000000, 0x20000000, 4096,
-                              &heaps_.physical);  // AnyX360: 4 KB pages (see PhysicalAlloc)
+                              0xA0000000, 0x20000000, 64 * 1024,
+                              &heaps_.physical);
   heaps_.vC0000000.Initialize(this, virtual_membase_, HeapType::kGuestPhysical,
                               0xC0000000, 0x20000000, 16 * 1024 * 1024,
                               &heaps_.physical);
