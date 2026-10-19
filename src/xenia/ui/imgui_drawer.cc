@@ -789,6 +789,25 @@ ImGuiIO& ImGuiDrawer::GetIO() {
   return ImGui::GetIO();
 }
 
+void ImGuiDrawer::RequestPaintIfIdle(double idle_seconds) {
+  if (!presenter_ || dialogs_.empty()) {
+    return;
+  }
+  const uint64_t now = Clock::QueryHostTickCount();
+  const double idle =
+      double(now - last_frame_time_ticks_) / frame_time_tick_frequency_;
+  if (now < last_frame_time_ticks_ || idle >= idle_seconds) {
+    presenter_->RequestUIPaintFromUIThread();
+  }
+}
+
+void ImGuiDrawer::OnInputWithoutContinuousRepaint() {
+  if (!continuous_repaint_) {
+    // A guest frame usually comes within 50 ms and draws the input's effect.
+    RequestPaintIfIdle(0.05);
+  }
+}
+
 void ImGuiDrawer::OnKeyDown(KeyEvent& e) { OnKey(e, true); }
 
 void ImGuiDrawer::OnKeyUp(KeyEvent& e) { OnKey(e, false); }
@@ -801,6 +820,7 @@ void ImGuiDrawer::OnKeyChar(KeyEvent& e) {
     io.AddInputCharacter(character);
     e.set_handled(true);
   }
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::OnMouseDown(MouseEvent& e) {
@@ -829,10 +849,12 @@ void ImGuiDrawer::OnMouseDown(MouseEvent& e) {
       io.MouseDown[button] = true;
     }
   }
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::OnMouseMove(MouseEvent& e) {
   SwitchToPhysicalMouseAndUpdateMousePosition(e);
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::OnMouseUp(MouseEvent& e) {
@@ -861,12 +883,14 @@ void ImGuiDrawer::OnMouseUp(MouseEvent& e) {
       }
     }
   }
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::OnMouseWheel(MouseEvent& e) {
   SwitchToPhysicalMouseAndUpdateMousePosition(e);
   auto& io = GetIO();
   io.MouseWheel += float(e.scroll_y()) / float(MouseEvent::kScrollPerDetent);
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
@@ -938,6 +962,7 @@ void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
     default:
       break;
   }
+  OnInputWithoutContinuousRepaint();
 }
 
 void ImGuiDrawer::UpdateMousePosition(float x, float y) {

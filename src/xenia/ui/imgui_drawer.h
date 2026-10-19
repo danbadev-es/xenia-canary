@@ -70,6 +70,13 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   // frame rate. Off, the UI is drawn only with new guest frames, so a passive
   // overlay doesn't make the UI thread repaint at the monitor refresh rate.
   void SetContinuousRepaint(bool enable) { continuous_repaint_ = enable; }
+  // AnyX360: asks for a paint if nothing has been drawn for `idle_seconds`
+  // (UI thread). Without continuous repaint the guest's frames draw the UI;
+  // input and a slow timer use this so dialogs still respond while the guest
+  // presents nothing (loading), without adding paints between guest frames:
+  // repaints between vsynced guest presents fill the swap chain's queue and
+  // slow the guest down.
+  void RequestPaintIfIdle(double idle_seconds);
 
   std::unique_ptr<ImmediateTexture> LoadImGuiIcon(
       std::span<const uint8_t> data);
@@ -177,6 +184,9 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
 
   bool are_notifications_enabled_ = true;
   bool continuous_repaint_ = true;
+
+  // AnyX360: input without continuous repaint asks for a paint when idle.
+  void OnInputWithoutContinuousRepaint();
 };
 
 }  // namespace ui
