@@ -1874,8 +1874,12 @@ ID3D12Resource* D3D12TextureCache::D3D12Texture::GetOrCreate3DAs2DResource(
 
   auto& d3d12_cache = static_cast<D3D12TextureCache&>(texture_cache());
 
-  // If cached, transition and return.
+  // If cached, bring it up to date (an earlier load may have failed, or the
+  // guest may have rewritten the texture since), transition and return.
   if (texture_3d_as_2d_) {
+    if (!d3d12_cache.LoadTextureData(*texture_3d_as_2d_)) {
+      return nullptr;
+    }
     d3d12_cache.command_processor_.PushTransitionBarrier(
         texture_3d_as_2d_->resource(),
         texture_3d_as_2d_->SetResourceState(end_state), end_state);
@@ -1930,8 +1934,13 @@ ID3D12Resource* D3D12TextureCache::D3D12Texture::GetOrCreate3DAs2DResource(
       d3d12_cache, key_2d, resource_2d.Get(), initial_state, false));
 
   if (!d3d12_cache.LoadTextureData(*texture_3d_as_2d_)) {
+    // The load may fail after it has recorded GPU work writing the new
+    // resource (the guest invalidating the memory while it loads), so the
+    // wrapper must not be destroyed before that submission completes: it's
+    // kept with this texture (destroyed only when no submission uses it) and
+    // loaded again the next time. Destroying it here made the GPU write a
+    // released resource, and the device was lost.
     XELOGE("D3D12Texture: Failed to load 3D-as-2D texture data");
-    texture_3d_as_2d_.reset();
     return nullptr;
   }
 
