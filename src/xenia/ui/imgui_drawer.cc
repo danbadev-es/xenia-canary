@@ -584,6 +584,17 @@ void ImGuiDrawer::InitializeFonts(const float font_size) {
   LoadJapaneseFont(io, font_size);
 }
 
+float ImGuiDrawer::GetDpiScale() const {
+  return float(window_->GetDpi()) / float(window_->GetMediumDpi());
+}
+
+void ImGuiDrawer::RebuildFontTexture() {
+  ImGui::SetCurrentContext(internal_state_);
+  GetIO().Fonts->TexID = reinterpret_cast<ImTextureID>(nullptr);
+  font_texture_.reset();
+  SetupFontTexture();
+}
+
 void ImGuiDrawer::SetupFontTexture() {
   if (font_texture_ || !immediate_drawer_) {
     return;
@@ -675,7 +686,8 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   last_frame_time_ticks_ = current_frame_time_ticks;
 
   float physical_to_logical =
-      float(window_->GetMediumDpi()) / float(window_->GetDpi());
+      physical_pixels_ ? 1.0f
+                       : float(window_->GetMediumDpi()) / float(window_->GetDpi());
   io.DisplaySize.x = window_->GetActualPhysicalWidth() * physical_to_logical;
   io.DisplaySize.y = window_->GetActualPhysicalHeight() * physical_to_logical;
 
@@ -968,7 +980,8 @@ void ImGuiDrawer::OnKey(KeyEvent& e, bool is_down) {
 void ImGuiDrawer::UpdateMousePosition(float x, float y) {
   auto& io = GetIO();
   float physical_to_logical =
-      float(window_->GetMediumDpi()) / float(window_->GetDpi());
+      physical_pixels_ ? 1.0f
+                       : float(window_->GetMediumDpi()) / float(window_->GetDpi());
   io.MousePos.x = x * physical_to_logical;
   io.MousePos.y = y * physical_to_logical;
 }

@@ -77,6 +77,14 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   // repaints between vsynced guest presents fill the swap chain's queue and
   // slow the guest down.
   void RequestPaintIfIdle(double idle_seconds);
+  // AnyX360: sizes in physical pixels: the display size and the mouse aren't converted to 96-DPI
+  // units, and the caller makes its fonts and sizes for the DPI (GetDpiScale), so text is drawn at
+  // the screen's own resolution instead of magnified.
+  void SetPhysicalPixels(bool enable) { physical_pixels_ = enable; }
+  float GetDpiScale() const;
+  // AnyX360: the font atlas changed (other fonts or sizes): its texture is made again. UI thread,
+  // outside Draw.
+  void RebuildFontTexture();
 
   std::unique_ptr<ImmediateTexture> LoadImGuiIcon(
       std::span<const uint8_t> data);
@@ -184,6 +192,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
 
   bool are_notifications_enabled_ = true;
   bool continuous_repaint_ = true;
+  bool physical_pixels_ = false;
 
   // AnyX360: input without continuous repaint asks for a paint when idle.
   void OnInputWithoutContinuousRepaint();
