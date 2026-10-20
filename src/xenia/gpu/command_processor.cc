@@ -505,12 +505,25 @@ void CommandProcessor::ShutdownContext() {
 }
 
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
-  read_ptr_index_ = 0;
+  // AnyX360: a title may set the ring up again (Kinect Sports creates its
+  // Direct3D device twice). Both pointers start over, as on the console. The
+  // read pointer belongs to the worker thread, which may still be finishing the
+  // previous ring's commands: it's reset there, before any new command, and the
+  // write pointer here, so the worker doesn't run the old range again over the
+  // cleared ring while the title writes its new commands.
+  write_ptr_index_ = 0;
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
 
   std::memset(memory_->TranslatePhysical(primary_buffer_ptr_),
               0, primary_buffer_size_);
+  CallInThread([this]() {
+    read_ptr_index_ = 0;
+    if (read_ptr_writeback_ptr_) {
+      xe::store_and_swap<uint32_t>(
+          memory_->TranslatePhysical(read_ptr_writeback_ptr_), 0);
+    }
+  });
 }
 
 void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr,
