@@ -11,6 +11,7 @@
 #define XENIA_GPU_D3D12_DEFERRED_COMMAND_LIST_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -42,6 +43,27 @@ class DeferredCommandList {
   void Execute(ID3D12GraphicsCommandList* command_list,
                ID3D12GraphicsCommandList1* command_list_1,
                ID3D12GraphicsCommandList2* command_list_2);
+
+  // AnyX360: replaying on another thread while commands are still being
+  // recorded (the storage never moves). Every command before the one being
+  // written is complete; Publish() marks the end of the last one too.
+  size_t published() const {
+    return published_bytes_.load(std::memory_order_acquire);
+  }
+  void Publish() {
+    published_bytes_.store(command_stream_.size(), std::memory_order_release);
+  }
+  size_t size() const { return command_stream_.size(); }
+  // Replays the commands from `offset` (bytes) to `end`, advancing `offset`.
+  // `current_pipeline_state` carries over between calls. Unless `final`, stops
+  // before setting a pipeline whose asynchronous creation hasn't finished and
+  // returns false: replayed at the end of the submission, as Execute would, it
+  // may be ready by then (draws without a pipeline are skipped).
+  bool ExecuteRange(ID3D12GraphicsCommandList* command_list,
+                    ID3D12GraphicsCommandList1* command_list_1,
+                    ID3D12GraphicsCommandList2* command_list_2, size_t& offset,
+                    size_t end, ID3D12PipelineState*& current_pipeline_state,
+                    bool final);
 
   D3D12_RECT* ClearDepthStencilViewAllocatedRects(
       D3D12_CPU_DESCRIPTOR_HANDLE depth_stencil_view,
@@ -728,6 +750,7 @@ class DeferredCommandList {
   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
   // std::vector<uintmax_t> command_stream_;
   FixedVMemVector<MAX_SIZEOF_COMMANDLIST> command_stream_;
+  std::atomic<size_t> published_bytes_{0};
 };
 
 }  // namespace d3d12

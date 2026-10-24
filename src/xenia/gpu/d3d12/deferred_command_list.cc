@@ -25,20 +25,42 @@ DeferredCommandList::DeferredCommandList(
   command_stream_.reserve(initial_size / sizeof(uintmax_t));
 }
 
-void DeferredCommandList::Reset() { command_stream_.clear(); }
+void DeferredCommandList::Reset() {
+  command_stream_.clear();
+  published_bytes_.store(0, std::memory_order_release);
+}
 
 void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
                                   ID3D12GraphicsCommandList1* command_list_1,
                                   ID3D12GraphicsCommandList2* command_list_2) {
+  size_t offset = 0;
+  ID3D12PipelineState* current_pipeline_state = nullptr;
+  ExecuteRange(command_list, command_list_1, command_list_2, offset,
+               command_stream_.size(), current_pipeline_state, true);
+}
+
+bool DeferredCommandList::ExecuteRange(
+    ID3D12GraphicsCommandList* command_list,
+    ID3D12GraphicsCommandList1* command_list_1,
+    ID3D12GraphicsCommandList2* command_list_2, size_t& offset, size_t end,
+    ID3D12PipelineState*& current_pipeline_state, bool final) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
-  const uintmax_t* stream = (const uintmax_t*)command_stream_.data();
-  size_t stream_remaining = command_stream_.size() / sizeof(uintmax_t);
-  ID3D12PipelineState* current_pipeline_state = nullptr;
+  const uintmax_t* stream =
+      reinterpret_cast<const uintmax_t*>(command_stream_.data() + offset);
+  size_t stream_remaining = (end - offset) / sizeof(uintmax_t);
   while (stream_remaining != 0) {
     const CommandHeader& header =
         *reinterpret_cast<const CommandHeader*>(stream);
+    if (!final && header.command == Command::kSetPipelineStateHandle &&
+        !command_processor_.GetD3D12PipelineByHandle(
+            *reinterpret_cast<void* const*>(stream +
+                                            kCommandHeaderSizeElements))) {
+      offset = size_t(reinterpret_cast<const uint8_t*>(stream) -
+                      command_stream_.data());
+      return false;
+    }
     stream += kCommandHeaderSizeElements;
     stream_remaining -= kCommandHeaderSizeElements;
     switch (header.command) {
@@ -335,6 +357,8 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
     stream += header.arguments_size_elements;
     stream_remaining -= header.arguments_size_elements;
   }
+  offset = end;
+  return true;
 }
 
 void* DeferredCommandList::WriteCommand(Command command,
@@ -343,6 +367,9 @@ void* DeferredCommandList::WriteCommand(Command command,
       round_up(arguments_size_bytes, sizeof(uintmax_t), false);
 
   size_t offset = command_stream_.size();
+  // The commands before this one are complete (a concurrent replay may take
+  // them).
+  published_bytes_.store(offset, std::memory_order_release);
   constexpr size_t kCommandHeaderSizeBytes =
       kCommandHeaderSizeElements * sizeof(uintmax_t);
   command_stream_.resize(offset + kCommandHeaderSizeBytes +

@@ -32,6 +32,11 @@ DEFINE_bool(d3d12_bindless, true,
             "but may make debugging more complicated.",
             "D3D12");
 
+DEFINE_bool(d3d12_replay_thread, true,
+            "AnyX360: replay the recorded Direct3D 12 commands on a thread of "
+            "their own while the guest's commands are processed.",
+            "D3D12");
+
 DEFINE_bool(d3d12_submit_on_primary_buffer_end, true,
             "Submit the command list when a PM4 primary buffer ends if it's "
             "possible to submit immediately to try to reduce frame latency.",
@@ -850,6 +855,11 @@ bool D3D12CommandProcessor::SetupContext() {
   command_list_->Close();
   command_list_->QueryInterface(IID_PPV_ARGS(&command_list_1_));
   command_list_->QueryInterface(IID_PPV_ARGS(&command_list_2_));
+
+  if (cvars::d3d12_replay_thread) {
+    replay_shutdown_ = false;
+    replay_thread_ = std::thread([this] { ReplayThreadMain(); });
+  }
 
   bindless_resources_used_ =
       cvars::d3d12_bindless &&
@@ -1711,6 +1721,22 @@ bool D3D12CommandProcessor::SetupContext() {
 
 void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
+
+  if (replay_thread_.joinable()) {
+    {
+      std::lock_guard<std::mutex> lock(replay_mutex_);
+      replay_shutdown_ = true;
+    }
+    replay_cv_.notify_all();
+    replay_thread_.join();
+    if (replay_streaming_) {
+      // A submission left open: its commands are dropped, as they were before
+      // (it's never executed), but the command list isn't left recording.
+      command_list_->Close();
+      replay_streaming_ = false;
+      replay_active_ = false;
+    }
+  }
 
   anyx360_timestamp_mapping_ = nullptr;
   ui::d3d12::util::ReleaseAndNull(anyx360_timestamp_readback_);
@@ -3645,6 +3671,105 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   return true;
 }
 
+bool D3D12CommandProcessor::EnsureWritableCommandAllocator() {
+  if (command_allocator_writable_first_) {
+    return true;
+  }
+  ID3D12CommandAllocator* command_allocator;
+  if (FAILED(GetD3D12Provider().GetDevice()->CreateCommandAllocator(
+          D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)))) {
+    XELOGE("Failed to create a command allocator");
+    return false;
+  }
+  command_allocator_writable_first_ = new CommandAllocator;
+  command_allocator_writable_first_->command_allocator = command_allocator;
+  command_allocator_writable_first_->last_usage_submission = 0;
+  command_allocator_writable_first_->next = nullptr;
+  command_allocator_writable_last_ = command_allocator_writable_first_;
+  return true;
+}
+
+void D3D12CommandProcessor::StartReplay() {
+  replay_streaming_ = false;
+  if (!replay_thread_.joinable() || !EnsureWritableCommandAllocator()) {
+    return;
+  }
+  // The command list is the replay thread's until FinishReplay.
+  command_allocator_writable_first_->command_allocator->Reset();
+  command_list_->Reset(command_allocator_writable_first_->command_allocator,
+                       nullptr);
+  if (anyx360_timestamp_heap_) {
+    command_list_->EndQuery(
+        anyx360_timestamp_heap_, D3D12_QUERY_TYPE_TIMESTAMP,
+        uint32_t(GetCurrentSubmission() % kAnyX360TimestampSlots) * 2);
+  }
+  replay_final_.store(false, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(replay_mutex_);
+    replay_active_ = true;
+    replay_finished_ = false;
+  }
+  replay_cv_.notify_one();
+  replay_streaming_ = true;
+}
+
+void D3D12CommandProcessor::FinishReplay() {
+  deferred_command_list_.Publish();
+  replay_final_.store(true, std::memory_order_release);
+  std::unique_lock<std::mutex> lock(replay_mutex_);
+  replay_cv_.notify_one();
+  replay_done_cv_.wait(lock, [this] { return replay_finished_; });
+  replay_active_ = false;
+  replay_streaming_ = false;
+}
+
+void D3D12CommandProcessor::ReplayThreadMain() {
+  xe::threading::set_name("D3D12 Replay");
+  // Like the command processor, ahead of normal-priority work.
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+  std::unique_lock<std::mutex> lock(replay_mutex_);
+  for (;;) {
+    replay_cv_.wait(lock, [this] {
+      return replay_shutdown_ || (replay_active_ && !replay_finished_);
+    });
+    if (replay_shutdown_) {
+      return;
+    }
+    lock.unlock();
+    size_t offset = 0;
+    ID3D12PipelineState* pipeline_state = nullptr;
+    for (;;) {
+      // The final flag before the size: with it set, the size is final too.
+      const bool final = replay_final_.load(std::memory_order_acquire);
+      const size_t end = deferred_command_list_.published();
+      bool waiting_for_pipeline = false;
+      if (offset < end) {
+        waiting_for_pipeline = !deferred_command_list_.ExecuteRange(
+            command_list_, command_list_1_, command_list_2_, offset, end,
+            pipeline_state, final);
+      }
+      if (final) {
+        break;
+      }
+      if (offset >= end || waiting_for_pipeline) {
+        // Wait for more commands (a few hundred microseconds of them is
+        // replayed in much less time) or the end of the submission.
+        std::unique_lock<std::mutex> wait_lock(replay_mutex_);
+        replay_cv_.wait_for(wait_lock, std::chrono::microseconds(500), [this] {
+          return replay_shutdown_ ||
+                 replay_final_.load(std::memory_order_acquire);
+        });
+        if (replay_shutdown_) {
+          return;
+        }
+      }
+    }
+    lock.lock();
+    replay_finished_ = true;
+    replay_done_cv_.notify_one();
+  }
+}
+
 void D3D12CommandProcessor::AnyX360CollectTimestamps(
     uint64_t completed_submission) {
   if (!anyx360_timestamp_mapping_ ||
@@ -3820,6 +3945,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     // end of the submission (when async pipeline creation requests are
     // fulfilled).
     deferred_command_list_.Reset();
+    StartReplay();
 
     // Resume the active query segment.
     OpenQuerySegment(false);
@@ -3936,21 +4062,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
 
   // Make sure there is a command allocator to write commands to.
-  if (submission_open_ && !command_allocator_writable_first_) {
-    ID3D12CommandAllocator* command_allocator;
-    if (FAILED(provider.GetDevice()->CreateCommandAllocator(
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
-            IID_PPV_ARGS(&command_allocator)))) {
-      XELOGE("Failed to create a command allocator");
-      // Try to submit later. Completely dropping the submission is not
-      // permitted because resources would be left in an undefined state.
-      return false;
-    }
-    command_allocator_writable_first_ = new CommandAllocator;
-    command_allocator_writable_first_->command_allocator = command_allocator;
-    command_allocator_writable_first_->last_usage_submission = 0;
-    command_allocator_writable_first_->next = nullptr;
-    command_allocator_writable_last_ = command_allocator_writable_first_;
+  if (submission_open_ && !EnsureWritableCommandAllocator()) {
+    // Try to submit later. Completely dropping the submission is not
+    // permitted because resources would be left in an undefined state.
+    return false;
   }
 
   bool is_closing_frame = is_swap && frame_open_;
@@ -3988,17 +4103,22 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // happens between Xenia submissions.
     const uint32_t anyx360_timestamp_slot =
         uint32_t(GetCurrentSubmission() % kAnyX360TimestampSlots) * 2;
-    ID3D12CommandAllocator* command_allocator =
-        command_allocator_writable_first_->command_allocator;
-    command_allocator->Reset();
-    command_list_->Reset(command_allocator, nullptr);
-    if (anyx360_timestamp_heap_) {
-      command_list_->EndQuery(anyx360_timestamp_heap_,
-                              D3D12_QUERY_TYPE_TIMESTAMP,
-                              anyx360_timestamp_slot);
+    if (replay_streaming_) {
+      // The replay thread has the commands up to here; give it the rest.
+      FinishReplay();
+    } else {
+      ID3D12CommandAllocator* command_allocator =
+          command_allocator_writable_first_->command_allocator;
+      command_allocator->Reset();
+      command_list_->Reset(command_allocator, nullptr);
+      if (anyx360_timestamp_heap_) {
+        command_list_->EndQuery(anyx360_timestamp_heap_,
+                                D3D12_QUERY_TYPE_TIMESTAMP,
+                                anyx360_timestamp_slot);
+      }
+      deferred_command_list_.Execute(command_list_, command_list_1_,
+                                     command_list_2_);
     }
-    deferred_command_list_.Execute(command_list_, command_list_1_,
-                                   command_list_2_);
     if (anyx360_timestamp_heap_) {
       command_list_->EndQuery(anyx360_timestamp_heap_,
                               D3D12_QUERY_TYPE_TIMESTAMP,

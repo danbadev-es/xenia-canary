@@ -12,8 +12,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -583,6 +586,25 @@ class D3D12CommandProcessor final : public CommandProcessor {
   // AnyX360Counters as the submissions complete.
   static constexpr uint32_t kAnyX360TimestampSlots = 1024;
 
+  // AnyX360: the deferred command list is replayed into the Direct3D 12
+  // command list by a thread of its own while the guest's commands are still
+  // being processed, instead of all at once at the end of the submission on
+  // the command processor's thread (a sixth of its time in heavy scenes).
+  bool EnsureWritableCommandAllocator();
+  void ReplayThreadMain();
+  void StartReplay();
+  void FinishReplay();
+  std::thread replay_thread_;
+  std::mutex replay_mutex_;
+  std::condition_variable replay_cv_;       // to the replay thread
+  std::condition_variable replay_done_cv_;  // to the command processor
+  bool replay_shutdown_ = false;   // guarded by replay_mutex_
+  bool replay_active_ = false;     // a submission is being replayed
+  bool replay_finished_ = false;   // the replay of the final commands is done
+  std::atomic<bool> replay_final_{false};  // no more commands will be added
+  // The open submission's commands go to the replay thread (otherwise they're
+  // replayed at its end, as before).
+  bool replay_streaming_ = false;
   void AnyX360CollectTimestamps(uint64_t completed_submission);
   ID3D12QueryHeap* anyx360_timestamp_heap_ = nullptr;
   ID3D12Resource* anyx360_timestamp_readback_ = nullptr;
