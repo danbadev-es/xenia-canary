@@ -9,6 +9,7 @@
 
 #include "xenia/ui/d3d12/d3d12_gpu_completion_timeline.h"
 
+#include <chrono>
 #include <utility>
 
 #include "xenia/base/logging.h"
@@ -46,7 +47,17 @@ void D3D12GPUCompletionTimeline::UpdateCompletedSubmission() {
 
 void D3D12GPUCompletionTimeline::AwaitSubmissionImpl(
     const uint64_t awaited_submission) {
+  if (!wait_counter_) {
+    fence_->SetEventOnCompletion(awaited_submission, nullptr);
+    return;
+  }
+  const auto start = std::chrono::steady_clock::now();
   fence_->SetEventOnCompletion(awaited_submission, nullptr);
+  wait_counter_->fetch_add(
+      uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now() - start)
+                   .count()),
+      std::memory_order_relaxed);
 }
 
 HRESULT D3D12GPUCompletionTimeline::SignalAndAdvance(

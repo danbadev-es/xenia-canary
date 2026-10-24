@@ -10,6 +10,8 @@
 #ifndef XENIA_UI_D3D12_D3D12_GPU_COMPLETION_TIMELINE_H_
 #define XENIA_UI_D3D12_D3D12_GPU_COMPLETION_TIMELINE_H_
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 #include "xenia/ui/d3d12/d3d12_api.h"
@@ -41,6 +43,9 @@ class D3D12GPUCompletionTimeline : public GPUCompletionTimeline {
   // If signaling has succeeded, will advance to the next submission.
   HRESULT SignalAndAdvance(ID3D12CommandQueue* queue);
 
+  // AnyX360: adds the time spent blocked awaiting submissions (nanoseconds).
+  void SetWaitCounter(std::atomic<uint64_t>* counter) { wait_counter_ = counter; }
+
  protected:
   void AwaitSubmissionImpl(uint64_t awaited_submission) override;
 
@@ -49,6 +54,7 @@ class D3D12GPUCompletionTimeline : public GPUCompletionTimeline {
       : fence_(fence) {}
 
   Microsoft::WRL::ComPtr<ID3D12Fence> fence_;
+  std::atomic<uint64_t>* wait_counter_ = nullptr;
 };
 
 }  // namespace d3d12

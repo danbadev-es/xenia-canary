@@ -578,6 +578,18 @@ class D3D12CommandProcessor final : public CommandProcessor {
   std::unique_ptr<ui::d3d12::D3D12GPUCompletionTimeline> completion_timeline_;
   bool submission_open_ = false;
 
+  // AnyX360: GPU time of each submission, from timestamps written at the start
+  // and the end of its command list (slot = submission % count), summed into
+  // AnyX360Counters as the submissions complete.
+  static constexpr uint32_t kAnyX360TimestampSlots = 1024;
+
+  void AnyX360CollectTimestamps(uint64_t completed_submission);
+  ID3D12QueryHeap* anyx360_timestamp_heap_ = nullptr;
+  ID3D12Resource* anyx360_timestamp_readback_ = nullptr;
+  const uint64_t* anyx360_timestamp_mapping_ = nullptr;
+  uint64_t anyx360_timestamp_frequency_ = 0;
+  uint64_t anyx360_timestamps_collected_ = 0;
+
   // For awaiting non-submission queue operations such as UpdateTileMappings in
   // AwaitAllQueueOperationsCompletion when they're queued after the latest
   // ExecuteCommandLists + Signal, thus won't be awaited by just awaiting the

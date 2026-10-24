@@ -8,6 +8,7 @@
  */
 
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
+#include "xenia/gpu/anyx360_counters.h"
 
 #include <cstdint>
 #include <cstring>
@@ -4496,6 +4497,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
     const uint64_t* render_target_resolve_clear_values,
     const Transfer::Rectangle* resolve_clear_rectangle) {
   assert_true(GetPath() == Path::kHostRenderTargets);
+
+  if (render_target_transfers) {
+    uint64_t transfer_count = 0;
+    for (uint32_t i = 0; i < render_target_count; ++i) {
+      if (render_targets[i]) {
+        transfer_count += render_target_transfers[i].size();
+      }
+    }
+    GetAnyX360Counters().transfers.fetch_add(transfer_count,
+                                             std::memory_order_relaxed);
+  }
 
   const ui::d3d12::D3D12Provider& provider =
       command_processor_.GetD3D12Provider();

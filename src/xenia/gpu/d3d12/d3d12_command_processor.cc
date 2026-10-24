@@ -9,6 +9,7 @@
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include <cstring>
+#include "xenia/gpu/anyx360_counters.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
 #include "xenia/base/cvar.h"
@@ -793,6 +794,37 @@ bool D3D12CommandProcessor::SetupContext() {
   if (!completion_timeline_ ||
       !queue_operations_since_submission_completion_timeline_) {
     return false;
+  }
+  // AnyX360: the time this thread waits for the GPU, and the GPU's own time.
+  completion_timeline_->SetWaitCounter(&GetAnyX360Counters().gpu_wait_ns);
+  queue_operations_since_submission_completion_timeline_->SetWaitCounter(
+      &GetAnyX360Counters().gpu_wait_ns);
+  {
+    UINT64 frequency = 0;
+    D3D12_QUERY_HEAP_DESC timestamp_heap_desc = {};
+    timestamp_heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    timestamp_heap_desc.Count = kAnyX360TimestampSlots * 2;
+    D3D12_RESOURCE_DESC timestamp_buffer_desc;
+    ui::d3d12::util::FillBufferResourceDesc(
+        timestamp_buffer_desc, sizeof(uint64_t) * kAnyX360TimestampSlots * 2,
+        D3D12_RESOURCE_FLAG_NONE);
+    void* mapping = nullptr;
+    if (SUCCEEDED(direct_queue->GetTimestampFrequency(&frequency)) &&
+        frequency &&
+        SUCCEEDED(device->CreateQueryHeap(
+            &timestamp_heap_desc, IID_PPV_ARGS(&anyx360_timestamp_heap_))) &&
+        SUCCEEDED(device->CreateCommittedResource(
+            &ui::d3d12::util::kHeapPropertiesReadback, D3D12_HEAP_FLAG_NONE,
+            &timestamp_buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&anyx360_timestamp_readback_))) &&
+        SUCCEEDED(anyx360_timestamp_readback_->Map(0, nullptr, &mapping))) {
+      anyx360_timestamp_frequency_ = frequency;
+      anyx360_timestamp_mapping_ = static_cast<const uint64_t*>(mapping);
+    } else {
+      XELOGW("AnyX360: no GPU timestamps");
+      ui::d3d12::util::ReleaseAndNull(anyx360_timestamp_readback_);
+      ui::d3d12::util::ReleaseAndNull(anyx360_timestamp_heap_);
+    }
   }
 
   // Create the command list and one allocator because it's needed for a command
@@ -1679,6 +1711,10 @@ bool D3D12CommandProcessor::SetupContext() {
 
 void D3D12CommandProcessor::ShutdownContext() {
   AwaitAllQueueOperationsCompletion();
+
+  anyx360_timestamp_mapping_ = nullptr;
+  ui::d3d12::util::ReleaseAndNull(anyx360_timestamp_readback_);
+  ui::d3d12::util::ReleaseAndNull(anyx360_timestamp_heap_);
 
   for (auto& pair : readback_buffers_) {
     ui::d3d12::util::ReleaseAndNull(pair.second.buffers[0]);
@@ -2617,6 +2653,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+  GetAnyX360Counters().draws.fetch_add(1, std::memory_order_relaxed);
 
   ID3D12Device* device = GetD3D12Provider().GetDevice();
   const RegisterFile& regs = *register_file_;
@@ -3302,6 +3339,7 @@ bool D3D12CommandProcessor::IssueCopy() {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
+  GetAnyX360Counters().copies.fetch_add(1, std::memory_order_relaxed);
   if (!BeginSubmission(true)) {
     return false;
   }
@@ -3607,6 +3645,37 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   return true;
 }
 
+void D3D12CommandProcessor::AnyX360CollectTimestamps(
+    uint64_t completed_submission) {
+  if (!anyx360_timestamp_mapping_ ||
+      completed_submission <= anyx360_timestamps_collected_) {
+    return;
+  }
+  // Slots older than the ring were overwritten: skip them.
+  uint64_t first = std::max(anyx360_timestamps_collected_ + 1,
+                            completed_submission >= kAnyX360TimestampSlots
+                                ? completed_submission -
+                                      kAnyX360TimestampSlots + 1
+                                : uint64_t(1));
+  uint64_t ticks = 0, timed = 0;
+  for (uint64_t submission = first; submission <= completed_submission;
+       ++submission) {
+    const uint64_t* pair =
+        anyx360_timestamp_mapping_ +
+        size_t(submission % kAnyX360TimestampSlots) * 2;
+    if (pair[1] > pair[0]) {
+      ticks += pair[1] - pair[0];
+      ++timed;
+    }
+  }
+  anyx360_timestamps_collected_ = completed_submission;
+  AnyX360Counters& counters = GetAnyX360Counters();
+  counters.gpu_busy_ns.fetch_add(
+      uint64_t(double(ticks) * 1e9 / double(anyx360_timestamp_frequency_)),
+      std::memory_order_relaxed);
+  counters.gpu_timed_submissions.fetch_add(timed, std::memory_order_relaxed);
+}
+
 void D3D12CommandProcessor::CheckSubmissionCompletion(
     uint64_t await_submission) {
   if (await_submission >= GetCurrentSubmission()) {
@@ -3638,6 +3707,7 @@ void D3D12CommandProcessor::CheckSubmissionCompletion(
   completion_timeline_->AwaitSubmissionAndUpdateCompleted(await_submission);
 
   const uint64_t completed_submission = GetCompletedSubmission();
+  AnyX360CollectTimestamps(completed_submission);
 
   // Reclaim command allocators.
   while (command_allocator_submitted_first_) {
@@ -3916,12 +3986,29 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // ExecuteCommandLists - the boundaries of ExecuteCommandLists are a full
     // UAV and aliasing barrier, and subsystems of the emulator assume it
     // happens between Xenia submissions.
+    const uint32_t anyx360_timestamp_slot =
+        uint32_t(GetCurrentSubmission() % kAnyX360TimestampSlots) * 2;
     ID3D12CommandAllocator* command_allocator =
         command_allocator_writable_first_->command_allocator;
     command_allocator->Reset();
     command_list_->Reset(command_allocator, nullptr);
+    if (anyx360_timestamp_heap_) {
+      command_list_->EndQuery(anyx360_timestamp_heap_,
+                              D3D12_QUERY_TYPE_TIMESTAMP,
+                              anyx360_timestamp_slot);
+    }
     deferred_command_list_.Execute(command_list_, command_list_1_,
                                    command_list_2_);
+    if (anyx360_timestamp_heap_) {
+      command_list_->EndQuery(anyx360_timestamp_heap_,
+                              D3D12_QUERY_TYPE_TIMESTAMP,
+                              anyx360_timestamp_slot + 1);
+      command_list_->ResolveQueryData(
+          anyx360_timestamp_heap_, D3D12_QUERY_TYPE_TIMESTAMP,
+          anyx360_timestamp_slot, 2, anyx360_timestamp_readback_,
+          sizeof(uint64_t) * anyx360_timestamp_slot);
+    }
+    GetAnyX360Counters().submissions.fetch_add(1, std::memory_order_relaxed);
     command_list_->Close();
     ID3D12CommandList* execute_command_lists[] = {command_list_};
     direct_queue->ExecuteCommandLists(1, execute_command_lists);

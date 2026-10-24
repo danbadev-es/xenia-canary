@@ -23,6 +23,7 @@
 #include "xenia/gpu/sampler_info.h"
 #include "xenia/gpu/texture_info.h"
 #include "xenia/gpu/xenos_zpd_report.h"
+#include "xenia/gpu/anyx360_counters.h"
 #if !defined(NDEBUG)
 
 #define XE_ENABLE_GPU_REG_WRITE_LOGGING 1
@@ -124,6 +125,11 @@ DEFINE_bool(
 
 namespace xe {
 namespace gpu {
+
+AnyX360Counters& GetAnyX360Counters() {
+  static AnyX360Counters counters;
+  return counters;
+}
 
 // This should be written completely differently with support for different
 // types.
@@ -425,7 +431,13 @@ void CommandProcessor::WorkerThreadMain() {
     assert_true(read_ptr_index_ != write_ptr_index);
 
     // Execute. Note that we handle wraparound transparently.
+    const auto anyx360_busy_start = std::chrono::steady_clock::now();
     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    GetAnyX360Counters().cp_busy_ns.fetch_add(
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - anyx360_busy_start)
+                     .count()),
+        std::memory_order_relaxed);
 
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.

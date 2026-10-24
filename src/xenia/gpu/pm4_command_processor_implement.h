@@ -740,6 +740,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
                 : register_file_->values[poll_reg_addr];
 
   bool matched = false;
+  std::chrono::steady_clock::time_point anyx360_wait_start{};
 
   do {
     uint32_t value = value_ref;
@@ -757,6 +758,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
     matched = MatchValueAndRef(value & mask, ref, wait_info);
 
     if (!matched) {
+      if (anyx360_wait_start == std::chrono::steady_clock::time_point{}) {
+        anyx360_wait_start = std::chrono::steady_clock::now();
+      }
       // Wait.
       if (wait >= 0x100) {
         PrepareForWait();
@@ -776,6 +780,13 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
       }
     }
   } while (!matched);
+  if (anyx360_wait_start != std::chrono::steady_clock::time_point{}) {
+    GetAnyX360Counters().cp_wait_mem_ns.fetch_add(
+        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::steady_clock::now() - anyx360_wait_start)
+                     .count()),
+        std::memory_order_relaxed);
+  }
 
   return true;
 }
