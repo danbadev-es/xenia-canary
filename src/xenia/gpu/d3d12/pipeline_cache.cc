@@ -26,6 +26,7 @@
 #include "xenia/base/string.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/base/xxhash.h"
+#include "xenia/gpu/anyx360_counters.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 #include "xenia/gpu/d3d12/d3d12_render_target_cache.h"
 #include "xenia/gpu/draw_util.h"
@@ -3301,22 +3302,28 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   HRESULT hr =
       device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state));
   if (FAILED(hr)) {
+    GetAnyX360Counters().pipeline_failures.fetch_add(1,
+                                                    std::memory_order_relaxed);
+    // AnyX360: the HRESULT unsigned (it printed as 0x-7FF8FFF2).
     if (runtime_description.pixel_shader != nullptr) {
       XELOGE(
           "Failed to create graphics pipeline with VS {:016X}, PS {:016X}: "
           "HRESULT 0x{:08X}",
           runtime_description.vertex_shader->shader().ucode_data_hash(),
-          runtime_description.pixel_shader->shader().ucode_data_hash(), hr);
+          runtime_description.pixel_shader->shader().ucode_data_hash(),
+          uint32_t(hr));
     } else {
       XELOGE(
           "Failed to create graphics pipeline with VS {:016X}: HRESULT "
           "0x{:08X}",
-          runtime_description.vertex_shader->shader().ucode_data_hash(), hr);
+          runtime_description.vertex_shader->shader().ucode_data_hash(),
+          uint32_t(hr));
     }
     // Log D3D12 debug messages for all pipeline failures.
     command_processor_.GetD3D12Provider().LogD3D12DebugMessages();
     return nullptr;
   }
+  GetAnyX360Counters().pipelines.fetch_add(1, std::memory_order_relaxed);
   std::wstring name;
   if (runtime_description.pixel_shader != nullptr) {
     name = fmt::format(

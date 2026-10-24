@@ -1981,6 +1981,13 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(
     return nullptr;
   }
   {
+    AnyX360Counters& counters = GetAnyX360Counters();
+    counters.render_targets.fetch_add(1, std::memory_order_relaxed);
+    counters.render_target_bytes.fetch_add(
+        device->GetResourceAllocationInfo(0, 1, &resource_desc).SizeInBytes,
+        std::memory_order_relaxed);
+  }
+  {
     std::u16string resource_name = xe::to_utf16(key.GetDebugName());
     resource->SetName(reinterpret_cast<LPCWSTR>(resource_name.c_str()));
   }

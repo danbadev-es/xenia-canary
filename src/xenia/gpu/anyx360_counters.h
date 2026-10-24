@@ -1,8 +1,8 @@
 /**
  * AnyX360: counters the host reads for its performance log line and overlay
  * (draws, resolves, render target transfers, GPU time from timestamp queries,
- * and the command processor's waits for the GPU). Updated by the command
- * processor thread, read by any thread.
+ * the command processor's waits for the GPU, and the caches' memory). Updated
+ * by the GPU's threads, read by any thread.
  */
 #ifndef XENIA_GPU_ANYX360_COUNTERS_H_
 #define XENIA_GPU_ANYX360_COUNTERS_H_
@@ -32,6 +32,14 @@ struct AnyX360Counters {
   // spins or sleeps waiting for commands.
   std::atomic<uint64_t> cp_busy_ns{0};
   std::atomic<uint64_t> cp_wait_mem_ns{0};
+  // Memory: the texture cache's host memory now, the render targets created
+  // (they live until the cache is cleared at shutdown) and their size, and the
+  // pipelines created and the ones whose creation failed.
+  std::atomic<uint64_t> texture_bytes{0};
+  std::atomic<uint64_t> render_targets{0};
+  std::atomic<uint64_t> render_target_bytes{0};
+  std::atomic<uint64_t> pipelines{0};
+  std::atomic<uint64_t> pipeline_failures{0};
 };
 
 AnyX360Counters& GetAnyX360Counters();

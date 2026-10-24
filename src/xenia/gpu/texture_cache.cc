@@ -14,6 +14,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/base/profiling.h"
+#include "xenia/gpu/anyx360_counters.h"
 #include "xenia/gpu/gpu_flags.h"
 #include "xenia/gpu/shared_memory.h"
 
@@ -1105,6 +1106,8 @@ void TextureCache::UpdateTexturesTotalHostMemoryUsage(uint64_t add,
                                                       uint64_t subtract) {
   textures_total_host_memory_usage_ =
       textures_total_host_memory_usage_ - subtract + add;
+  GetAnyX360Counters().texture_bytes.store(textures_total_host_memory_usage_,
+                                           std::memory_order_relaxed);
   COUNT_profile_set("gpu/texture_cache/total_host_memory_usage_mb",
                     uint32_t((textures_total_host_memory_usage_ +
                               ((UINT32_C(1) << 20) - 1)) >>
