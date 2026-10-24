@@ -767,6 +767,14 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
         if (!cvars::vsync) {
           // User wants it fast and dangerous.
           // do nothing
+        } else if (std::chrono::steady_clock::now() - anyx360_wait_start <
+                   std::chrono::microseconds(
+                       std::max(cvars::wait_reg_mem_yield_us, 0))) {
+          // AnyX360: yield at first instead of sleeping a millisecond (or
+          // more, with the timer's granularity) at once: what the GPU waits
+          // for is usually written by the title's CPU shortly, and the command
+          // processor is what limits the frame rate in heavy scenes.
+          xe::threading::MaybeYield();
         } else {
           xe::threading::Sleep(std::chrono::milliseconds(wait / 0x100));
           ReturnFromWait();

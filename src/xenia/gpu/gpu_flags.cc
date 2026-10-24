@@ -26,6 +26,13 @@ DEFINE_path(
 
 DEFINE_bool(vsync, true, "Enable VSYNC.", "GPU");
 
+DEFINE_int32(wait_reg_mem_yield_us, 1000,
+             "AnyX360: with VSYNC, how long a WAIT_REG_MEM packet yields the "
+             "command processor's thread before sleeping a millisecond at a "
+             "time (what it waits for is usually written by the guest's CPU "
+             "shortly). 0 sleeps at once, as Xenia did.",
+             "GPU");
+
 DEFINE_uint64(framerate_limit, 0,
               "Maximum frames per second. 0 = Unlimited frames.\n"
               "Defaults to 60, when set to 0, and VSYNC is enabled.",
