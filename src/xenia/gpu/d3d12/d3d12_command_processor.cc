@@ -8,7 +8,9 @@
  */
 
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include "xenia/gpu/anyx360_counters.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
@@ -2406,6 +2408,29 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
         // multiple times per frame).
         if (!(use_pwl_gamma_ramp ? gamma_ramp_pwl_up_to_date_
                                  : gamma_ramp_256_entry_table_up_to_date_)) {
+          // AnyX360: ANYX360_GPU_FORMATS=1 logs the gamma ramp each time a
+          // changed one is uploaded (every 16th entry of red).
+          static const bool log_gamma =
+              std::getenv("ANYX360_GPU_FORMATS") != nullptr;
+          if (log_gamma) {
+            std::string ramp;
+            if (use_pwl_gamma_ramp) {
+              for (uint32_t i = 0; i < 128; i += 8) {
+                const reg::DC_LUT_PWL_DATA& e = gamma_ramp_pwl_rgb()[i * 3];
+                ramp += fmt::format(" {:04X}+{:04X}", uint32_t(e.base),
+                                    uint32_t(e.delta));
+              }
+            } else {
+              for (uint32_t i = 0; i < 256; i += 16) {
+                ramp += fmt::format(
+                    " {:03X}",
+                    uint32_t(gamma_ramp_256_entry_table()[i].color_10_red));
+              }
+            }
+            XELOGI("AnyX360 gamma ramp ({}, frontbuffer format {}):{}",
+                   use_pwl_gamma_ramp ? "PWL" : "256-entry table",
+                   uint32_t(frontbuffer_format), ramp);
+          }
           uint32_t gamma_ramp_offset_bytes = use_pwl_gamma_ramp ? 256 * 4 : 0;
           uint32_t gamma_ramp_upload_offset_bytes =
               uint32_t(frame_current_ % kQueueFrames) * ((256 + 128 * 3) * 4) +
@@ -2899,6 +2924,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
           vertex_shader->ucode_data_hash(), vertex_shader_modification.value,
           pixel_shader ? pixel_shader->ucode_data_hash() : 0,
           pixel_shader_modification.value);
+      GetAnyX360Counters().draws_skipped_pipeline.fetch_add(
+          1, std::memory_order_relaxed);
       OnVIZSurveyDraw(false);
       return true;
     }

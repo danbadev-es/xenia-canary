@@ -1050,6 +1050,7 @@ bool CommandProcessor::PrepareVIZDraw(uint32_t token) {
   if (!(token & 0x100)) {
     return true;
   }
+  GetAnyX360Counters().viz_draws.fetch_add(1, std::memory_order_relaxed);
 
   const uint32_t id = token & 0x3F;
   VIZQuery& query = viz_queries_[id];
@@ -1101,6 +1102,7 @@ bool CommandProcessor::PrepareVIZDraw(uint32_t token) {
 // Only called by EVENT_WRITE_ZPD. This closes the report's segment since the
 // last event and queues its counter snapshot.
 void CommandProcessor::QueueZPDReport(uint32_t report_address) {
+  GetAnyX360Counters().zpd_reports.fetch_add(1, std::memory_order_relaxed);
   if (active_segment_.report) {
     CloseQuerySegment();
   }
@@ -1387,6 +1389,16 @@ void CommandProcessor::PumpPendingRetire() {
     zpd_pending_retire_start_ms_ = 0;
 
     zpd_sample_counter_ += front.delta;
+    if (!front.delta.z_pass) {
+      GetAnyX360Counters().zpd_zero.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (front.speculative &&
+        !front.speculative_delta.z_pass != !front.delta.z_pass) {
+      (front.delta.z_pass
+           ? GetAnyX360Counters().zpd_guessed_hidden_was_visible
+           : GetAnyX360Counters().zpd_guessed_visible_was_hidden)
+          .fetch_add(1, std::memory_order_relaxed);
+    }
     if (front.speculative) {
       if (fast_zpd_report_cached_deltas_.size() >= kFastZPDCacheMaxEntries &&
           !fast_zpd_report_cached_deltas_.count(front.address)) {

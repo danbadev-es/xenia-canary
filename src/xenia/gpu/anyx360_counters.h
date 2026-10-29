@@ -40,6 +40,17 @@ struct AnyX360Counters {
   std::atomic<uint64_t> render_target_bytes{0};
   std::atomic<uint64_t> pipelines{0};
   std::atomic<uint64_t> pipeline_failures{0};
+  // Occlusion queries: EVENT_WRITE_ZPD reports, the ones that retired with no
+  // passing samples, and (fast modes) the guesses written at event time that
+  // the real result contradicted (guessed visible but hidden, and the other
+  // way round); draws carrying a VIZ token; draws skipped while their
+  // pipeline was being created in the background.
+  std::atomic<uint64_t> zpd_reports{0};
+  std::atomic<uint64_t> zpd_zero{0};
+  std::atomic<uint64_t> zpd_guessed_visible_was_hidden{0};
+  std::atomic<uint64_t> zpd_guessed_hidden_was_visible{0};
+  std::atomic<uint64_t> viz_draws{0};
+  std::atomic<uint64_t> draws_skipped_pipeline{0};
 };
 
 AnyX360Counters& GetAnyX360Counters();

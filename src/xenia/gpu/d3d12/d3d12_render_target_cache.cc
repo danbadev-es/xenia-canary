@@ -11,7 +11,9 @@
 #include "xenia/gpu/anyx360_counters.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <unordered_set>
 
 #include "third_party/dxbc/DXBCChecksum.h"
 #include "third_party/fmt/include/fmt/xchar.h"
@@ -1360,6 +1362,43 @@ bool D3D12RenderTargetCache::Resolve(const Memory& memory,
           draw_resolution_scale_y(), fixed_16_truncated_to_minus_1_to_1,
           fixed_16_truncated_to_minus_1_to_1, resolve_info)) {
     return false;
+  }
+
+  // AnyX360: ANYX360_GPU_FORMATS=1 logs each kind of resolve once (source
+  // format, destination format, size), for finding format conversion issues.
+  {
+    static const bool log_formats = std::getenv("ANYX360_GPU_FORMATS") != nullptr;
+    if (log_formats) {
+      static std::unordered_set<uint64_t> seen;
+      const bool depth = resolve_info.IsCopyingDepth();
+      const draw_util::ResolveEdramInfo& edram =
+          depth ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
+      uint64_t key = uint64_t(edram.format) | (uint64_t(depth) << 8) |
+                     (uint64_t(edram.msaa_samples) << 9) |
+                     (uint64_t(resolve_info.copy_dest_info.value & 0x3FFFFF) << 12) |
+                     (uint64_t(resolve_info.coordinate_info.width_div_8) << 34) |
+                     (uint64_t(resolve_info.height_div_8) << 46) |
+                     (uint64_t(resolve_info.rb_copy_control.copy_command) << 58);
+      if (seen.insert(key).second) {
+        XELOGI(
+            "AnyX360 resolve: {} format {} msaa {} -> dest format {} number {} "
+            "exp_bias {} swap {} endian {}, {}x{}, copy_command {}, sample "
+            "select {}, clear {}{}",
+            depth ? "depth" : "color", uint32_t(edram.format),
+            uint32_t(edram.msaa_samples),
+            uint32_t(resolve_info.copy_dest_info.copy_dest_format),
+            uint32_t(resolve_info.copy_dest_info.copy_dest_number),
+            int32_t(resolve_info.copy_dest_info.copy_dest_exp_bias),
+            uint32_t(resolve_info.copy_dest_info.copy_dest_swap),
+            uint32_t(resolve_info.copy_dest_info.copy_dest_endian),
+            resolve_info.coordinate_info.width_div_8 * 8,
+            resolve_info.height_div_8 * 8,
+            uint32_t(resolve_info.rb_copy_control.copy_command),
+            uint32_t(resolve_info.rb_copy_control.copy_sample_select),
+            resolve_info.rb_copy_control.color_clear_enable ? "color" : "",
+            resolve_info.rb_copy_control.depth_clear_enable ? " depth" : "");
+      }
+    }
   }
 
   if (copy_dest_info_out) {

@@ -9,6 +9,9 @@
 
 #include "xenia/gpu/render_target_cache.h"
 
+#include <cstdlib>
+#include <unordered_set>
+
 #include <cmath>
 #include <cstring>
 
@@ -789,6 +792,30 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
       uint32_t rt_bit_index = 1 + i;
       depth_and_color_rts_used_bits |= uint32_t(1) << rt_bit_index;
       xenos::ColorRenderTargetFormat color_format = color_info.color_format;
+      // AnyX360: ANYX360_GPU_FORMATS=1 logs each kind of color render target
+      // drawn to once (index, format, base, pitch, MSAA).
+      {
+        static const bool log_formats =
+            std::getenv("ANYX360_GPU_FORMATS") != nullptr;
+        if (log_formats) {
+          static std::unordered_set<uint64_t> seen;
+          auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
+          uint64_t key = uint64_t(color_format) | (uint64_t(i) << 4) |
+                         (uint64_t(color_info.color_base) << 8) |
+                         (uint64_t(surface_info.surface_pitch) << 24) |
+                         (uint64_t(surface_info.msaa_samples) << 40) |
+                         (uint64_t(color_info.color_exp_bias & 0x3F) << 42);
+          if (seen.insert(key).second) {
+            XELOGI(
+                "AnyX360 render target: color {} format {} base {} pitch {} "
+                "msaa {} exp_bias {}",
+                i, uint32_t(color_format), uint32_t(color_info.color_base),
+                uint32_t(surface_info.surface_pitch),
+                uint32_t(surface_info.msaa_samples),
+                int32_t(color_info.color_exp_bias));
+          }
+        }
+      }
       bool is_64bpp = xenos::IsColorRenderTargetFormat64bpp(color_format);
       edram_bases[rt_bit_index] = draw_util::AddWindowOffsetToEdramBase(
           color_info.color_base, window_offset_tiles, is_64bpp);

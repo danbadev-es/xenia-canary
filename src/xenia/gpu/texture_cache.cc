@@ -9,6 +9,9 @@
 
 #include "xenia/gpu/texture_cache.h"
 
+#include <cstdlib>
+#include <unordered_set>
+
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
@@ -370,6 +373,34 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       }
       binding.Reset();
       continue;
+    }
+    // AnyX360: ANYX360_GPU_FORMATS=1 logs each kind of texture binding once
+    // (format, size, signs, resolved or not), for finding format issues.
+    {
+      static const bool log_formats =
+          std::getenv("ANYX360_GPU_FORMATS") != nullptr;
+      if (log_formats) {
+        static std::unordered_set<uint64_t> seen;
+        const TextureKey& k = binding.key;
+        uint64_t key = uint64_t(k.format) | (uint64_t(k.width_minus_1) << 6) |
+                       (uint64_t(k.height_minus_1) << 19) |
+                       (uint64_t(binding.swizzled_signs) << 32) |
+                       (uint64_t(k.dimension) << 40) |
+                       (uint64_t(fetch.num_format) << 42) |
+                       (uint64_t(fetch.exp_adjust & 0x3F) << 43) |
+                       (uint64_t(k.scaled_resolve) << 49) |
+                       (uint64_t(k.tiled) << 50);
+        if (seen.insert(key).second) {
+          XELOGI(
+              "AnyX360 texture: format {} {}x{}x{} dim {} signs {:02X} "
+              "num_format {} exp_adjust {} tiled {} base {:08X}",
+              uint32_t(k.format), k.width_minus_1 + 1, k.height_minus_1 + 1,
+              k.depth_or_array_size_minus_1 + 1, uint32_t(k.dimension),
+              uint32_t(binding.swizzled_signs), uint32_t(fetch.num_format),
+              int32_t(fetch.exp_adjust), uint32_t(k.tiled),
+              uint32_t(k.base_page) << 12);
+        }
+      }
     }
     uint32_t old_host_swizzle = binding.host_swizzle;
     binding.host_swizzle =
