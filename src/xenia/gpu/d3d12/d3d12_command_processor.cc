@@ -14,6 +14,7 @@
 #include "xenia/gpu/anyx360_counters.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_order.h"
+#include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -2308,6 +2309,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr,
                                       uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
+  async_pipeline_wait_us_this_frame_ = 0;
   EndZPDFrame();
 
   ui::Presenter* presenter = graphics_system_->presenter();
@@ -2915,6 +2917,35 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
               bound_depth_and_color_render_target_formats, &pipeline_handle,
               &root_signature)) {
         return false;
+      }
+    }
+    // AnyX360: before skipping the draw, give the creation threads up to
+    // async_shader_compilation_wait_ms per frame to finish its pipeline, so a
+    // burst of new pipelines (a new area) doesn't leave meshes, lighting and
+    // effects missing for seconds.
+    if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr &&
+        cvars::async_shader_compilation_wait_ms > 0) {
+      uint64_t budget_us =
+          uint64_t(cvars::async_shader_compilation_wait_ms) * 1000;
+      if (async_pipeline_wait_us_this_frame_ < budget_us) {
+        uint64_t start_ticks = Clock::QueryHostTickCount();
+        uint64_t frequency = Clock::QueryHostTickFrequency();
+        uint64_t remaining_us = budget_us - async_pipeline_wait_us_this_frame_;
+        uint64_t waited_us = 0;
+        while (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) ==
+               nullptr) {
+          waited_us = (Clock::QueryHostTickCount() - start_ticks) * 1000000 /
+                      frequency;
+          if (waited_us >= remaining_us) {
+            break;
+          }
+          xe::threading::Sleep(std::chrono::microseconds(250));
+        }
+        waited_us =
+            (Clock::QueryHostTickCount() - start_ticks) * 1000000 / frequency;
+        async_pipeline_wait_us_this_frame_ += waited_us;
+        GetAnyX360Counters().pipeline_wait_us.fetch_add(
+            waited_us, std::memory_order_relaxed);
       }
     }
     if (pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {

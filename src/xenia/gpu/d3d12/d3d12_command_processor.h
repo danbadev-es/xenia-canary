@@ -579,6 +579,9 @@ class D3D12CommandProcessor final : public CommandProcessor {
   std::deque<PendingQueryResolve> query_resolves_in_flight_;
 
   std::unique_ptr<ui::d3d12::D3D12GPUCompletionTimeline> completion_timeline_;
+  // AnyX360: time this frame's draws waited for background pipeline creation
+  // (async_shader_compilation_wait_ms).
+  uint64_t async_pipeline_wait_us_this_frame_ = 0;
   bool submission_open_ = false;
 
   // AnyX360: GPU time of each submission, from timestamps written at the start

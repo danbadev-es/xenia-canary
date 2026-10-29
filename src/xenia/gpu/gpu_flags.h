@@ -47,6 +47,8 @@ DECLARE_bool(no_discard_stencil_in_transfer_pipelines);
 
 DECLARE_bool(async_shader_compilation);
 
+DECLARE_int32(async_shader_compilation_wait_ms);
+
 DECLARE_bool(gpu_3d_to_2d_texture);
 
 DECLARE_bool(force_depth_clamp);

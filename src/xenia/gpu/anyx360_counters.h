@@ -51,6 +51,8 @@ struct AnyX360Counters {
   std::atomic<uint64_t> zpd_guessed_hidden_was_visible{0};
   std::atomic<uint64_t> viz_draws{0};
   std::atomic<uint64_t> draws_skipped_pipeline{0};
+  // Time draws waited for their pipelines (async_shader_compilation_wait_ms).
+  std::atomic<uint64_t> pipeline_wait_us{0};
 };
 
 AnyX360Counters& GetAnyX360Counters();

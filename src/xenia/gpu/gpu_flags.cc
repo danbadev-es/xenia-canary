@@ -118,6 +118,16 @@ DEFINE_bool(
     "created synchronously which causes stutter but no visual artifacts.",
     "GPU");
 
+// AnyX360: Resident Evil 6 enters areas with dozens of new pipelines at once.
+DEFINE_int32(
+    async_shader_compilation_wait_ms, 0,
+    "With async_shader_compilation, how long the draws of one frame may wait "
+    "in total for their pipelines to be created in the background before "
+    "being skipped, in milliseconds. 0: skip at once (meshes and effects may "
+    "be missing for a moment while new pipelines are created); higher values "
+    "trade a slower frame for a complete one.",
+    "GPU");
+
 DEFINE_bool(
     force_depth_clamp, false,
     "Use host depth clamping instead of near and far plane clipping when "
