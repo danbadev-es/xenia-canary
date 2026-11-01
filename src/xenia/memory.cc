@@ -46,6 +46,12 @@ DEFINE_bool(protect_on_release, false,
 DEFINE_bool(scribble_heap, false,
             "Scribble specific or random value into all allocated heap memory.",
             "Memory");
+DEFINE_bool(
+    xex_4k_heap_mirrors_64k_heap, true,
+    "The 0x90000000-0x9FFFFFFF heap (XEX 4 KB pages) is a view of the same memory as "
+    "0x80000000-0x8FFFFFFF. AnyX360 turns it off for Halo 3 and Halo: Reach, whose title "
+    "DLLs' function tables land there and would overwrite the title's image.",
+    "Memory");
 DEFINE_int32(scribble_heap_value, 0,
              "Value used to fill all allocated heap memory. 0 - Random value. "
              "Valid range: [1-255]",
@@ -364,11 +370,18 @@ int Memory::MapViews(uint8_t* mapping_base) {
   // side if system allocation granularity is bigger than 4 KB.
   uint64_t granularity_mask = ~uint64_t(system_allocation_granularity_ - 1);
   for (size_t n = 0; n < xe::countof(map_info); n++) {
+    uint64_t target_address = map_info[n].target_address;
+    // Without the mirror the 0x90000000 heap takes the mapping's own offsets
+    // there, which nothing else uses.
+    if (map_info[n].virtual_address_start == 0x90000000 &&
+        !cvars::xex_4k_heap_mirrors_64k_heap) {
+      target_address = 0x90000000;
+    }
     views_.all_views[n] = reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
         mapping_, mapping_base + map_info[n].virtual_address_start,
         map_info[n].virtual_address_end - map_info[n].virtual_address_start + 1,
         xe::memory::PageAccess::kReadWrite,
-        map_info[n].target_address & granularity_mask));
+        target_address & granularity_mask));
     if (!views_.all_views[n]) {
       // Failed, so bail and try again.
       UnmapViews();
