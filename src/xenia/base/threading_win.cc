@@ -8,6 +8,8 @@
  */
 
 #include <winternl.h>
+#include <algorithm>
+#include <vector>
 #include "xenia/base/assert.h"
 #include "xenia/base/chrono_steady_cast.h"
 #include "xenia/base/logging.h"
@@ -148,6 +150,55 @@ void MaybeYield() {
   // memorybarrier is really not necessary here...
   // MemoryBarrier();
 }
+
+bool SetCurrentThreadOnPerformanceCores(bool enable) {
+  // The CPU sets of the most performant efficiency class, when there is more
+  // than one class (a hybrid processor); empty otherwise.
+  static const std::vector<ULONG> performance_sets = [] {
+    std::vector<ULONG> sets;
+    ULONG length = 0;
+    GetSystemCpuSetInformation(nullptr, 0, &length, GetCurrentProcess(), 0);
+    if (!length) {
+      return sets;
+    }
+    std::vector<uint8_t> buffer(length);
+    if (!GetSystemCpuSetInformation(
+            reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(buffer.data()),
+            length, &length, GetCurrentProcess(), 0)) {
+      return sets;
+    }
+    BYTE lowest = 0xFF, highest = 0;
+    for (ULONG offset = 0; offset < length;) {
+      auto* info = reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(
+          buffer.data() + offset);
+      if (info->Type == CpuSetInformation) {
+        lowest = std::min(lowest, info->CpuSet.EfficiencyClass);
+        highest = std::max(highest, info->CpuSet.EfficiencyClass);
+      }
+      offset += info->Size;
+    }
+    if (lowest >= highest) {
+      return sets;
+    }
+    for (ULONG offset = 0; offset < length;) {
+      auto* info = reinterpret_cast<PSYSTEM_CPU_SET_INFORMATION>(
+          buffer.data() + offset);
+      if (info->Type == CpuSetInformation &&
+          info->CpuSet.EfficiencyClass == highest) {
+        sets.push_back(info->CpuSet.Id);
+      }
+      offset += info->Size;
+    }
+    return sets;
+  }();
+  if (enable && !performance_sets.empty()) {
+    return SetThreadSelectedCpuSets(GetCurrentThread(), performance_sets.data(),
+                                    ULONG(performance_sets.size())) != FALSE;
+  }
+  SetThreadSelectedCpuSets(GetCurrentThread(), nullptr, 0);
+  return false;
+}
+
 void NanoSleep(int64_t ns) {
   // nanosleep is done in 100 nanosecond increments
   int64_t in_nt_increments = ns / 100LL;

@@ -152,6 +152,8 @@ void MaybeYield() {
   __sync_synchronize();
 }
 
+bool SetCurrentThreadOnPerformanceCores(bool enable) { return false; }
+
 void SyncMemory() { __sync_synchronize(); }
 
 static void SleepFor(timespec rqtp) {

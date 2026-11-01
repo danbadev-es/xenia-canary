@@ -110,6 +110,12 @@ void set_name(const std::string_view name);
 // Yields the current thread to the scheduler. Maybe.
 void MaybeYield();
 
+// AnyX360: on a processor with cores of different performance (performance
+// and efficiency cores), keeps the current thread on the most performant ones;
+// elsewhere, and with `enable` false, lets it run on any. Returns whether the
+// thread was restricted.
+bool SetCurrentThreadOnPerformanceCores(bool enable);
+
 // Memory barrier (request - may be ignored).
 void SyncMemory();
 

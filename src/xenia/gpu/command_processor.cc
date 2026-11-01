@@ -123,6 +123,16 @@ DEFINE_bool(
     "mid-frame synchronization, so it has a huge performance impact.",
     "GPU");
 
+DEFINE_bool(
+    gpu_threads_on_performance_cores, true,
+    "AnyX360: on a processor with performance and efficiency cores, keep the "
+    "GPU command processor's threads (the command processor and, with "
+    "Direct3D 12, the replay thread) on the performance cores. Windows "
+    "otherwise moves them to an idle efficiency core when every performance "
+    "core is busy, and in draw-heavy scenes the command processor sets the "
+    "frame rate.",
+    "GPU");
+
 namespace xe {
 namespace gpu {
 
@@ -391,6 +401,8 @@ void CommandProcessor::WorkerThreadMain() {
     return;
   }
 
+  xe::threading::SetCurrentThreadOnPerformanceCores(
+      cvars::gpu_threads_on_performance_cores);
   while (worker_running_) {
     RunPendingFunctions();
 

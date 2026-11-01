@@ -46,6 +46,7 @@ DEFINE_bool(d3d12_submit_on_primary_buffer_end, true,
             "D3D12");
 
 DECLARE_bool(clear_memory_page_state);
+DECLARE_bool(gpu_threads_on_performance_cores);
 DECLARE_bool(readback_resolve_half_pixel_offset);
 
 namespace xe {
@@ -3783,8 +3784,11 @@ void D3D12CommandProcessor::FinishReplay() {
 
 void D3D12CommandProcessor::ReplayThreadMain() {
   xe::threading::set_name("D3D12 Replay");
-  // Like the command processor, ahead of normal-priority work.
+  // Like the command processor, ahead of normal-priority work, and on the
+  // performance cores.
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+  xe::threading::SetCurrentThreadOnPerformanceCores(
+      cvars::gpu_threads_on_performance_cores);
   std::unique_lock<std::mutex> lock(replay_mutex_);
   for (;;) {
     replay_cv_.wait(lock, [this] {
