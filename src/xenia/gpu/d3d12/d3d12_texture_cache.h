@@ -126,6 +126,8 @@ class D3D12TextureCache final : public TextureCache {
       const D3D12Shader::SamplerBinding& binding) const;
   SamplerParameters GetSamplerParameters(
       const D3D12Shader::SamplerBinding& binding) const;
+  SamplerParameters ComputeSamplerParameters(
+      const D3D12Shader::SamplerBinding& binding) const;
   void WriteSampler(SamplerParameters parameters,
                     D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
 
@@ -824,6 +826,18 @@ class D3D12TextureCache final : public TextureCache {
   // Bits per format, for checking if the host format should be point-filtered.
   uint64_t host_filterable_unsigned_ = 0;
   uint64_t host_filterable_signed_ = 0;
+
+  // AnyX360: the sampler parameters are a function of the fetch constant, the
+  // binding's filter overrides and anisotropic_override only, and every draw
+  // asks again for each of its samplers: remembered by those inputs.
+  struct SamplerParametersMemo {
+    uint32_t fetch[6];
+    uint32_t key;  // binding filters, anisotropic_override, 1 << 31 if valid
+    SamplerParameters parameters;
+  };
+  static constexpr uint32_t kSamplerParametersMemoSize = 256;
+  mutable SamplerParametersMemo
+      sampler_parameters_memo_[kSamplerParametersMemoSize] = {};
 
   Microsoft::WRL::ComPtr<ID3D12RootSignature> load_root_signature_;
   std::array<Microsoft::WRL::ComPtr<ID3D12PipelineState>, kLoadShaderCount>

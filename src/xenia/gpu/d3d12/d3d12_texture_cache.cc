@@ -775,6 +775,40 @@ void D3D12TextureCache::PrefetchSamplerParameters(
 }
 D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
     const D3D12Shader::SamplerBinding& binding) const {
+  // AnyX360: remembered by all the inputs of ComputeSamplerParameters (see
+  // sampler_parameters_memo_).
+  const uint32_t* fetch = &register_file()[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 +
+                                           binding.fetch_constant * 6];
+  // The override as ComputeSamplerParameters uses it (only 0-5 apply).
+  const int32_t anisotropic_override =
+      cvars::anisotropic_override > -1 && cvars::anisotropic_override < 6
+          ? cvars::anisotropic_override
+          : -1;
+  const uint32_t key = (uint32_t(1) << 31) | uint32_t(binding.mag_filter) |
+                       (uint32_t(binding.min_filter) << 3) |
+                       (uint32_t(binding.mip_filter) << 6) |
+                       (uint32_t(binding.aniso_filter) << 9) |
+                       (uint32_t(anisotropic_override + 1) << 13);
+  uint32_t hash = fetch[0] ^ fetch[1] * 0x9E3779B1u ^ fetch[2] * 0x85EBCA77u ^
+                  fetch[3] ^ fetch[4] * 0xC2B2AE3Du ^ fetch[5] ^ key;
+  hash ^= hash >> 15;
+  hash *= 0x2C1B3C6Du;
+  hash ^= hash >> 12;
+  SamplerParametersMemo& memo =
+      sampler_parameters_memo_[hash & (kSamplerParametersMemoSize - 1)];
+  if (memo.key == key && !std::memcmp(memo.fetch, fetch, sizeof(memo.fetch))) {
+    return memo.parameters;
+  }
+  SamplerParameters parameters = ComputeSamplerParameters(binding);
+  std::memcpy(memo.fetch, fetch, sizeof(memo.fetch));
+  memo.key = key;
+  memo.parameters = parameters;
+  return parameters;
+}
+
+D3D12TextureCache::SamplerParameters
+D3D12TextureCache::ComputeSamplerParameters(
+    const D3D12Shader::SamplerBinding& binding) const {
   const auto& regs = register_file();
   xenos::xe_gpu_texture_fetch_t fetch =
       regs.GetTextureFetch(binding.fetch_constant);
