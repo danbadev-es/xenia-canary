@@ -554,6 +554,33 @@ class PrimitiveProcessor {
       uint32_t strip_index_count) {
     return strip_index_count > 2 ? (strip_index_count - 2) * 3 : 0;
   }
+  // AnyX360: tessellated triangle strips with an index buffer (4D53085B -
+  // characters' faces in the cinematics), as lists: (v0, v1, v2), (v2, v1, v3)
+  // keeps the strip's winding, as the auto-indexed conversion does.
+  template <typename Index, typename IndexTransform>
+  static void TriangleStripToList(Index* dest, const Index* source,
+                                  uint32_t source_index_count,
+                                  const IndexTransform& index_transform) {
+    if (source_index_count <= 2) {
+      // To match GetTriangleStripListIndexCount.
+      return;
+    }
+    Index index_2_back = index_transform(source[0]);
+    Index index_1_back = index_transform(source[1]);
+    for (uint32_t i = 2; i < source_index_count; ++i) {
+      Index index_current = index_transform(source[i]);
+      if ((i & 1) == 0) {
+        *(dest++) = index_2_back;
+        *(dest++) = index_1_back;
+      } else {
+        *(dest++) = index_1_back;
+        *(dest++) = index_2_back;
+      }
+      *(dest++) = index_current;
+      index_2_back = index_1_back;
+      index_1_back = index_current;
+    }
+  }
   template <typename Index, typename IndexTransform>
   static void TriangleFanToList(Index* dest, const Index* source,
                                 uint32_t source_index_count,
@@ -679,6 +706,14 @@ class PrimitiveProcessor {
              range_it != ranges_end; ++range_it) {
           LineLoopToStrip(dest_write_ptr, source + range_it->guest_offset,
                           range_it->guest_index_count, index_transform);
+          dest_write_ptr += range_it->host_index_count;
+        }
+        break;
+      case xenos::PrimitiveType::kTriangleStrip:
+        for (PrimitiveRangeIterator range_it = ranges_beginning;
+             range_it != ranges_end; ++range_it) {
+          TriangleStripToList(dest_write_ptr, source + range_it->guest_offset,
+                              range_it->guest_index_count, index_transform);
           dest_write_ptr += range_it->host_index_count;
         }
         break;

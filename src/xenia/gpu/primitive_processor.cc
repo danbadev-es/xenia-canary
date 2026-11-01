@@ -759,7 +759,15 @@ bool PrimitiveProcessor::Process(ProcessingResult& result_out) {
           case xenos::PrimitiveType::kQuadList:
             host_index_count_getter = GetQuadListTriangleListIndexCount;
             break;
+          case xenos::PrimitiveType::kTriangleStrip:
+            // Only tessellated strips are converted (to lists).
+            host_index_count_getter = GetTriangleStripListIndexCount;
+            break;
           default:
+            XELOGE(
+                "Primitive processor: no conversion of indexed primitive type "
+                "{} to {}",
+                uint32_t(guest_primitive_type), uint32_t(host_primitive_type));
             assert_unhandled_case(guest_primitive_type);
             return false;
         }
